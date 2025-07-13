@@ -1,0 +1,86 @@
+# Provider Configuration Example
+# This file shows how to configure different providers for the KnowledgeCore Engine
+
+# LLM Providers
+llm:
+  default: deepseek  # Default LLM to use
+  providers:
+    deepseek:
+      provider: deepseek
+      api_key: ${DEEPSEEK_API_KEY}  # From environment variable
+      model: deepseek-chat
+      temperature: 0.1
+      max_tokens: 2048
+    
+    qwen:
+      provider: qwen
+      api_key: ${DASHSCOPE_API_KEY}
+      model: qwen2.5-72b-instruct
+      temperature: 0.1
+      max_tokens: 2048
+    
+    openai:
+      provider: openai
+      api_key: ${OPENAI_API_KEY}
+      model: gpt-4-turbo-preview
+      temperature: 0.1
+      max_tokens: 2048
+
+# Embedding Providers
+embedding:
+  default: dashscope  # Default embedding to use
+  providers:
+    dashscope:
+      provider: dashscope
+      api_key: ${DASHSCOPE_API_KEY}
+      model: text-embedding-v3
+      dimensions: 1536
+      batch_size: 25
+      normalize: true
+    
+    openai:
+      provider: openai
+      api_key: ${OPENAI_API_KEY}
+      model: text-embedding-3-large
+      dimensions: 3072
+      batch_size: 100
+    
+    huggingface:
+      provider: huggingface
+      model: BAAI/bge-large-zh-v1.5
+      dimensions: 1024
+      # No API key needed for local model
+
+# Vector Database Providers
+vectordb:
+  default: chromadb  # Default vector DB to use
+  providers:
+    chromadb:
+      provider: chromadb
+      collection_name: knowledge_core
+      persist_directory: ./data/chroma_db
+      distance_metric: cosine
+    
+    pinecone:
+      provider: pinecone
+      api_key: ${PINECONE_API_KEY}
+      environment: us-east-1
+      collection_name: knowledge_core
+      distance_metric: cosine
+
+# Application Settings
+app:
+  # Use multi-vector strategy for embeddings
+  embedding_strategy: multi_vector
+  
+  # Retrieval settings
+  retrieval:
+    top_k: 20
+    rerank_top_k: 5
+    use_reranker: true
+    reranker_model: bge-reranker-v2-m3-qwen
+  
+  # Generation settings
+  generation:
+    include_citations: true
+    max_context_length: 8000
