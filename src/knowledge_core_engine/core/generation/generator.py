@@ -366,7 +366,7 @@ class Generator:
                 citation = CitationReference(
                     index=idx,
                     chunk_id=context.chunk_id,
-                    document_title=context.metadata.get("document_title"),
+                    document_title=context.metadata.get("document_title") or context.metadata.get("source") or context.metadata.get("file_path", "Unknown"),
                     page=context.metadata.get("page"),
                     text=context.content[:200] + "..." if len(context.content) > 200 else context.content
                 )

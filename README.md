@@ -9,7 +9,7 @@
 
 🚀 **企业级RAG知识引擎** - 构建准确、可追溯、高性能的知识问答系统
 
-[快速开始](#快速开始) | [核心特性](#核心特性) | [安装指南](#安装指南) | [使用示例](#使用示例) | [API文档](#api文档)
+[快速开始](#🚀-快速开始) | [核心特性](#🚀-核心特性) | [安装指南](#📦-安装指南) | [使用示例](#🎯-快速开始) | [API文档](#🌐-rest-api-服务)
 
 </div>
 
@@ -26,6 +26,30 @@ KnowledgeCore Engine（简称K-Engine）是一个专为企业设计的**高性�
 - **易于集成**：提供简洁的Python API和REST API
 - **成本优化**：优先使用国产模型，显著降低使用成本
 - **高度可扩展**：模块化设计，支持自定义各个组件
+
+## 🚀 快速开始
+
+```python
+from knowledge_core_engine import KnowledgeEngine
+import asyncio
+
+async def main():
+    # 创建引擎
+    engine = KnowledgeEngine()
+    
+    # 添加文档
+    await engine.add("data/source_docs/")
+    
+    # 提问
+    answer = await engine.ask("什么是RAG？")
+    print(answer)
+
+asyncio.run(main())
+```
+
+就是这么简单！🎉
+
+> **注意**：确保您已经在 `.env` 文件中配置了API密钥，或通过环境变量设置。详见[环境变量配置](#环境变量配置)。
 
 ## 🚀 核心特性
 
@@ -100,109 +124,70 @@ LLAMA_CLOUD_API_KEY=your_llama_parse_key  # 可选，提供1000次/天免费额�
 
 ## 🎯 快速开始
 
-### 1. 基础使用示例
+### 最简单的使用方式（推荐）
 
 ```python
 import asyncio
-from pathlib import Path
-from knowledge_core_engine.core.config import RAGConfig
-from knowledge_core_engine.pipelines.ingestion import IngestionPipeline
-from knowledge_core_engine.pipelines.retrieval import RetrievalPipeline
-from knowledge_core_engine.pipelines.generation import GenerationPipeline
+from knowledge_core_engine import KnowledgeEngine
 
 async def main():
-    # 1. 配置系统
-    config = RAGConfig(
-        llm_provider="deepseek",
-        llm_api_key="your_api_key",
-        embedding_provider="dashscope",
-        embedding_api_key="your_api_key",
-        vector_store_provider="chromadb",
-        include_citations=True
-    )
+    # 创建知识引擎
+    engine = KnowledgeEngine()
     
-    # 2. 加载文档
-    ingestion = IngestionPipeline(config)
-    await ingestion.initialize()
+    # 添加文档
+    await engine.add("data/source_docs/")
     
-    # 处理PDF文档
-    result = await ingestion.process_document(Path("./docs/技术文档.pdf"))
-    print(f"✅ 文档处理完成：{result['chunks_created']} 个知识片段")
-    
-    # 3. 提问并获取答案
-    retrieval = RetrievalPipeline(config)
-    generation = GenerationPipeline(config)
-    await retrieval.initialize()
-    await generation.initialize()
-    
-    query = "RAG技术的主要优势是什么？"
-    
-    # 检索相关内容
-    contexts = await retrieval.retrieve(query, top_k=5)
-    
-    # 生成答案
-    result = await generation.generate(query, contexts)
-    
-    print(f"\n💡 问题：{query}")
-    print(f"📝 答案：{result.answer}")
-    print(f"📚 引用：{len(result.citations)} 个来源")
+    # 提问
+    answer = await engine.ask("什么是RAG技术？")
+    print(answer)
 
-# 运行示例
+# 运行
 asyncio.run(main())
 ```
 
-### 2. 批量文档处理
+是的，就是这么简单！🎉
+
+### 更多使用示例
+
+#### 1. 批量处理文档
 
 ```python
-async def batch_process_documents(directory: Path, config: RAGConfig):
-    """批量处理文档目录"""
-    ingestion = IngestionPipeline(config)
-    await ingestion.initialize()
-    
-    # 支持的文档格式
-    supported_formats = ['.pdf', '.docx', '.md', '.txt']
-    documents = []
-    
-    for format in supported_formats:
-        documents.extend(directory.glob(f"*{format}"))
-    
-    print(f"📁 找到 {len(documents)} 个文档")
-    
-    # 批量处理
-    for doc in documents:
-        try:
-            result = await ingestion.process_document(doc)
-            print(f"✅ {doc.name}: {result['chunks_created']} 个片段")
-        except Exception as e:
-            print(f"❌ {doc.name}: 处理失败 - {e}")
+from knowledge_core_engine import KnowledgeEngine
+
+engine = KnowledgeEngine()
+
+# 添加单个文件
+await engine.add("data/source_docs/example.pdf")
+
+# 添加整个目录
+await engine.add("data/source_docs/")
+
+# 添加多个文件
+await engine.add(["file1.pdf", "file2.md", "file3.txt"])
 ```
 
-### 3. 流式生成答案
+#### 2. 获取详细信息
 
 ```python
-async def stream_answer(query: str, config: RAGConfig):
-    """流式生成答案，提升用户体验"""
-    # 初始化管道
-    retrieval = RetrievalPipeline(config)
-    generation = GenerationPipeline(config)
-    await retrieval.initialize()
-    await generation.initialize()
-    
-    # 检索上下文
-    contexts = await retrieval.retrieve(query, top_k=5)
-    
-    # 流式生成
-    print(f"💡 答案生成中：", end="", flush=True)
-    
-    async for chunk in generation.stream_generate(query, contexts):
-        if chunk.content:
-            print(chunk.content, end="", flush=True)
-        
-        if chunk.is_final and chunk.citations:
-            print(f"\n\n📚 引用来源：")
-            for citation in chunk.citations:
-                print(f"   [{citation.index}] {citation.document_title}")
+# 获取详细的答案信息
+result = await engine.ask_with_details("什么是RAG？")
+
+print(f"答案: {result['answer']}")
+print(f"引用: {result['citations']}")
+print(f"上下文: {result['contexts']}")
 ```
+
+#### 3. 搜索功能
+
+```python
+# 搜索相关文档片段
+results = await engine.search("检索增强", top_k=10)
+
+for result in results:
+    print(f"相关度: {result['score']:.3f}")
+    print(f"内容: {result['content'][:100]}...")
+```
+
 
 ## 📖 高级功能
 
@@ -292,12 +277,15 @@ K-Engine提供了完整的REST API，方便集成到各种应用中。
 ### 启动API服务器
 
 ```bash
-# 开发模式
-python examples/api_server.py
+# 完整功能的API服务器（推荐）
+python examples/api_server_simple.py
 
-# 生产模式
+# 最小化API（仅健康检查）
 uvicorn knowledge_core_engine.api.app:app --host 0.0.0.0 --port 8000
 ```
+
+> 注意：`examples/api_server.py` 提供了完整的RAG功能API，包括文档上传、查询、流式响应等。
+> 而 `knowledge_core_engine.api.app` 只是一个最小化的入口点。
 
 ### API端点示例
 

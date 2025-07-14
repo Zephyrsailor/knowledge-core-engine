@@ -293,7 +293,7 @@ class TestEvaluationMetrics:
         """Test context precision metric."""
         from knowledge_core_engine.core.evaluation.metrics import ContextPrecisionMetric
         
-        metric = ContextPrecisionMetric()
+        metric = ContextPrecisionMetric(llm_provider="mock")
         
         question = "RAG的优势？"
         contexts = [

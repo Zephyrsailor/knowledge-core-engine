@@ -63,13 +63,26 @@ class BaseMetric(ABC):
             LLM response
         """
         if self.llm_provider == "mock":
-            return "MOCK_RESPONSE"
+            # 对于不同的prompt返回合适的mock响应
+            if "请回答\"相关\"或\"不相关\"" in prompt:
+                # Context precision检查 - 检查上下文内容是否与问题相关
+                context_part = prompt.split("上下文：")[1].split("\n\n请回答")[0].strip()
+                if "RAG" in context_part and ("准确性" in context_part or "追溯" in context_part):
+                    return '{"relevant": true, "reason": "Context is relevant to RAG"}'
+                elif "Python" in context_part:
+                    return '{"relevant": false, "reason": "Context is about Python, not RAG"}'
+                else:
+                    return '{"relevant": false, "reason": "Context is not relevant"}'
+            else:
+                return "MOCK_RESPONSE"
         
         if self._llm_client is None:
             await self.initialize()
         
+        # DeepSeekProvider需要messages参数而不是prompt
+        messages = [{"role": "user", "content": prompt}]
         response = await self._llm_client.generate(
-            prompt=prompt,
+            messages=messages,
             max_tokens=500
         )
         
@@ -338,11 +351,7 @@ class ContextPrecisionMetric(BaseMetric):
     
     async def _is_context_relevant(self, context: str, question: str, ground_truth: str) -> bool:
         """Check if a context is relevant to answering the question."""
-        if self.llm_provider == "mock":
-            # Simple keyword matching
-            question_words = set(question.lower().split())
-            context_words = set(context.lower().split())
-            return len(question_words & context_words) > 2
+        # 删除这里的mock逻辑，让它使用_call_llm中的mock逻辑
         
         prompt = f"""判断以下上下文是否有助于回答问题。
 
