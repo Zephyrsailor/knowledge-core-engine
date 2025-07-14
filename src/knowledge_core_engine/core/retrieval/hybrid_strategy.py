@@ -8,6 +8,7 @@ import logging
 from ..config import RAGConfig
 from .retriever import RetrievalResult
 from ..embedding.vector_store import QueryResult
+from .bm25_retriever import BM25Retriever
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class HybridRetriever:
         self.config = config
         self._vector_store = None
         self._bm25_index = None
+        self._bm25_retriever = BM25Retriever()
     
     async def retrieve(
         self,
@@ -46,14 +48,14 @@ class HybridRetriever:
         bm25_results = await self._bm25_search(query, top_k * 2, filters)
         
         # Fuse results based on configured method
-        fusion_method = self.config.extra_params.get("fusion_method", "weighted")
+        fusion_method = self.config.fusion_method
         
         if fusion_method == "weighted":
             results = self._weighted_fusion(
                 vector_results,
                 bm25_results,
-                self.config.extra_params.get("vector_weight", 0.7),
-                self.config.extra_params.get("bm25_weight", 0.3)
+                self.config.vector_weight,
+                self.config.bm25_weight
             )
         elif fusion_method == "rrf":
             rrf = ReciprocalRankFusion(k=60)
@@ -165,7 +167,7 @@ class HybridRetriever:
             Fused results
         """
         # Normalize scores
-        norm_method = self.config.extra_params.get("normalization", "min_max")
+        norm_method = "min_max"  # Default normalization method
         vector_norm = self._normalize_scores(vector_results, norm_method)
         bm25_norm = self._normalize_scores(bm25_results, norm_method)
         

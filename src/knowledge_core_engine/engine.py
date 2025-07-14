@@ -10,15 +10,22 @@ KnowledgeCore Engine - 简洁的高级封装
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import os
+import logging
 
 from .core.config import RAGConfig
 from .core.parsing.document_processor import DocumentProcessor
 from .core.chunking.pipeline import ChunkingPipeline
+from .core.chunking.enhanced_chunker import EnhancedChunker
+from .core.chunking.smart_chunker import SmartChunker
+from .core.enhancement.metadata_enhancer import MetadataEnhancer, EnhancementConfig
 from .core.embedding.embedder import TextEmbedder
 from .core.embedding.vector_store import VectorStore, VectorDocument
 from .core.retrieval.retriever import Retriever
+from .core.retrieval.reranker_wrapper import Reranker
 from .core.generation.generator import Generator
 from .utils.metadata_cleaner import clean_metadata
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeEngine:
@@ -71,9 +78,11 @@ class KnowledgeEngine:
         self._initialized = False
         self._parser = None
         self._chunker = None
+        self._metadata_enhancer = None
         self._embedder = None
         self._vector_store = None
         self._retriever = None
+        self._reranker = None
         self._generator = None
     
     async def _ensure_initialized(self):
@@ -83,16 +92,56 @@ class KnowledgeEngine:
             
         # 创建所有组件
         self._parser = DocumentProcessor()
-        self._chunker = ChunkingPipeline(enable_smart_chunking=True)
+        
+        # 根据配置选择合适的分块器
+        if self.config.enable_hierarchical_chunking:
+            # 使用增强分块器，支持层级关系
+            chunker = EnhancedChunker(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap
+            )
+        elif self.config.enable_semantic_chunking:
+            # 使用智能分块器
+            chunker = SmartChunker(
+                chunk_size=self.config.chunk_size,
+                chunk_overlap=self.config.chunk_overlap
+            )
+        else:
+            # 使用默认分块器
+            chunker = None
+        
+        self._chunker = ChunkingPipeline(
+            chunker=chunker,
+            enable_smart_chunking=self.config.enable_semantic_chunking
+        )
+        
+        # 如果启用元数据增强，创建增强器
+        if self.config.enable_metadata_enhancement:
+            enhancement_config = EnhancementConfig(
+                llm_provider=self.config.llm_provider,
+                model_name=self.config.llm_model,
+                api_key=self.config.llm_api_key,
+                temperature=0.1,
+                max_tokens=500
+            )
+            self._metadata_enhancer = MetadataEnhancer(enhancement_config)
+        
         self._embedder = TextEmbedder(self.config)
         self._vector_store = VectorStore(self.config)
         self._retriever = Retriever(self.config)
+        
+        # 如果启用重排序，创建重排器
+        if self.config.enable_reranking:
+            self._reranker = Reranker(self.config)
+        
         self._generator = Generator(self.config)
         
         # 初始化异步组件
         await self._embedder.initialize()
         await self._vector_store.initialize()
         await self._retriever.initialize()
+        if self._reranker:
+            await self._reranker.initialize()
         await self._generator.initialize()
         
         self._initialized = True
@@ -144,6 +193,19 @@ class KnowledgeEngine:
                 
                 # 分块
                 chunk_result = await self._chunker.process_parse_result(parse_result)
+                
+                # 如果启用元数据增强，对每个块进行增强
+                if self._metadata_enhancer:
+                    enhanced_chunks = []
+                    for chunk in chunk_result.chunks:
+                        try:
+                            # 增强元数据（方法会就地修改chunk并返回）
+                            enhanced_chunk = await self._metadata_enhancer.enhance_chunk(chunk)
+                            enhanced_chunks.append(enhanced_chunk)
+                        except Exception as e:
+                            logger.warning(f"Failed to enhance chunk metadata: {e}")
+                            enhanced_chunks.append(chunk)
+                    chunk_result.chunks = enhanced_chunks
                 
                 # 嵌入和存储
                 for i, chunk in enumerate(chunk_result.chunks):
@@ -214,6 +276,10 @@ class KnowledgeEngine:
         
         # 检索
         contexts = await self._retriever.retrieve(question, top_k=top_k)
+        
+        # 如果启用重排序，对结果进行重排
+        if self._reranker and contexts:
+            contexts = await self._reranker.rerank(question, contexts, top_k=self.config.rerank_top_k)
         
         if not contexts:
             no_context_answer = "抱歉，我在知识库中没有找到相关信息。"

@@ -1,4 +1,9 @@
-"""Simple configuration for KnowledgeCore Engine.
+"""[DEPRECATED] Simple configuration for KnowledgeCore Engine.
+
+WARNING: This file is deprecated and will be removed in a future version.
+Please use:
+- knowledge_core_engine.core.config.RAGConfig for RAG-specific configuration
+- knowledge_core_engine.utils.config.get_settings() for environment settings
 
 Just one way to do things - through environment variables and code.
 """

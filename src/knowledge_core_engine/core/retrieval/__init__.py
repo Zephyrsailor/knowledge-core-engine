@@ -33,13 +33,8 @@ from .retriever import (
     RetrievalResult,
     RetrievalStrategy
 )
-from .reranker import (
-    Reranker,
-    RerankResult,
-    RerankerProvider,
-    BGERerankerProvider,
-    CohereRerankerProvider
-)
+from .reranker_wrapper import Reranker
+from .reranker.base import RerankResult
 from .hybrid_strategy import (
     HybridRetriever,
     ScoreFusion,
@@ -54,10 +49,7 @@ __all__ = [
     
     # Reranker
     "Reranker",
-    "RerankResult", 
-    "RerankerProvider",
-    "BGERerankerProvider",
-    "CohereRerankerProvider",
+    "RerankResult",
     
     # Hybrid Strategy
     "HybridRetriever",

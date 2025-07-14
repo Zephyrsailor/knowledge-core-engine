@@ -2,9 +2,9 @@
 
 <div align="center">
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-264%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-305%20passing-brightgreen)](tests/)
 [![Code Style](https://img.shields.io/badge/Code%20Style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 🚀 **企业级RAG知识引擎** - 构建准确、可追溯、高性能的知识问答系统
@@ -60,10 +60,11 @@ asyncio.run(main())
 - 自动元数据增强，提升检索效果
 
 ### 🔍 高效检索系统
-- 混合检索：结合语义搜索和关键词匹配
-- 支持多种向量数据库：ChromaDB、Pinecone、Weaviate
-- 智能重排序，提升结果相关性
-- 支持元数据过滤和高级查询
+- **混合检索**：结合语义搜索和关键词匹配
+- **灵活的BM25支持**：BM25S（轻量级）、Elasticsearch（企业级）
+- **多种重排序选择**：本地模型（BGE、Qwen）、API服务（DashScope、Cohere）
+- **支持多种向量数据库**：ChromaDB、Pinecone、Weaviate
+- **智能查询扩展**：提升检索召回率
 
 ### 💡 精准答案生成
 - 集成多种LLM：DeepSeek、通义千问、OpenAI
@@ -81,7 +82,7 @@ asyncio.run(main())
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.11+
 - 2GB+ RAM
 - 10GB+ 磁盘空间（用于向量存储）
 
@@ -96,8 +97,13 @@ cd knowledge-core-engine
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# 安装依赖
-pip install -e ".[dev]"
+# 安装核心依赖
+pip install -e .
+
+# 可选：安装额外功能
+pip install -e ".[reranker-hf]"    # 安装HuggingFace重排序模型支持
+pip install -e ".[elasticsearch]"   # 安装Elasticsearch支持
+pip install -e ".[dev]"            # 安装开发依赖
 
 # 配置环境变量
 cp .env.example .env
@@ -191,83 +197,259 @@ for result in results:
 
 ## 📖 高级功能
 
-### 1. 自定义提示模板
+### 1. 获取详细信息
+
+除了简单的问答，您还可以获取更详细的信息：
 
 ```python
-from knowledge_core_engine.core.generation.prompt_builder import PromptTemplate
-
-# 创建专业分析模板
-technical_template = PromptTemplate(
-    name="technical_analysis",
-    template="""作为技术专家，请基于以下文档进行深入分析。
-
-问题：{query}
-
-参考文档：
-{contexts}
-
-请提供：
-1. 技术原理解释
-2. 实施步骤
-3. 注意事项
-4. 最佳实践
-
-分析："""
+# 获取包含引用、上下文等详细信息
+result = await engine.ask(
+    "什么是RAG技术？", 
+    return_details=True
 )
 
-# 使用自定义模板
-result = await generation.generate(
-    query="如何优化RAG系统性能？",
-    contexts=contexts,
-    template=technical_template.template
+print(f"答案: {result['answer']}")
+print(f"引用来源: {result['citations']}")
+print(f"相关上下文: {result['contexts']}")
+```
+
+### 2. 高级检索功能
+
+K-Engine 提供了一系列高级检索功能，让您可以根据需求进行精细化配置：
+
+#### 检索策略
+
+```python
+# 1. 纯向量检索（适合语义相似度匹配）
+engine = KnowledgeEngine(
+    retrieval_strategy="vector"
+)
+
+# 2. 纯关键词检索（适合精确匹配）
+engine = KnowledgeEngine(
+    retrieval_strategy="bm25"
+)
+
+# 3. 混合检索（默认，结合两者优势）
+engine = KnowledgeEngine(
+    retrieval_strategy="hybrid",
+    vector_weight=0.7,  # 向量检索权重
+    bm25_weight=0.3,    # BM25检索权重
+    fusion_method="weighted"  # 可选: weighted, rrf
 )
 ```
 
-### 2. 高级检索配置
+#### 查询扩展
+
+通过查询扩展提高检索召回率：
 
 ```python
-# 混合检索配置
-contexts = await retrieval.retrieve(
-    query="机器学习算法",
-    top_k=10,
-    search_type="hybrid",
-    hybrid_alpha=0.7,  # 70%语义搜索，30%关键词匹配
-    filters={
-        "document_type": {"$eq": "技术文档"},
-        "year": {"$gte": 2023}
-    }
-)
-
-# 使用重排序
-contexts = await retrieval.retrieve_with_rerank(
-    query="深度学习应用",
-    top_k=20,
-    rerank_top_k=5  # 从20个结果中重排序选出最相关的5个
+engine = KnowledgeEngine(
+    enable_query_expansion=True,
+    query_expansion_method="llm",  # 可选: llm, rule_based
+    query_expansion_count=3        # 扩展查询数量
 )
 ```
 
-### 3. 多语言支持
+#### 重排序
+
+K-Engine 支持多种重排序方式，满足不同场景需求：
 
 ```python
-# 中文配置
-zh_config = RAGConfig(
-    llm_provider="qwen",
-    extra_params={"language": "zh"}
+# 1. 使用本地 BGE 模型（推荐）
+engine = KnowledgeEngine(
+    enable_reranking=True,
+    reranker_provider="huggingface",
+    reranker_model="bge-reranker-v2-m3",
+    use_fp16=True,  # 节省内存
+    rerank_top_k=5
 )
 
-# 英文配置
-en_config = RAGConfig(
-    llm_provider="openai",
-    extra_params={"language": "en"}
+# 2. 使用本地 Qwen 模型（精度更高，适合36GB内存）
+engine = KnowledgeEngine(
+    enable_reranking=True,
+    reranker_provider="huggingface",
+    reranker_model="qwen3-reranker-8b",
+    use_fp16=True,
+    rerank_top_k=5
 )
 
-# 根据查询语言自动选择
-async def multilingual_query(query: str):
-    # 简单的语言检测
-    is_chinese = any('\u4e00' <= char <= '\u9fff' for char in query)
-    config = zh_config if is_chinese else en_config
+# 3. 使用 API 服务（无需本地资源）
+engine = KnowledgeEngine(
+    enable_reranking=True,
+    reranker_provider="api",
+    reranker_api_provider="dashscope",
+    reranker_model="gte-rerank-v2",
+    rerank_top_k=5
+)
+```
+
+#### BM25 配置
+
+K-Engine 提供灵活的 BM25 实现选择：
+
+```python
+# 1. 使用轻量级 BM25S（默认推荐）
+engine = KnowledgeEngine(
+    retrieval_strategy="hybrid",
+    bm25_provider="bm25s",
+    language="zh"  # 支持中文
+)
+
+# 2. 使用 Elasticsearch（企业级）
+engine = KnowledgeEngine(
+    retrieval_strategy="hybrid",
+    bm25_provider="elasticsearch",
+    elasticsearch_url="http://localhost:9200",
+    elasticsearch_index="knowledge_core"
+)
+```
+
+### 3. 分块策略配置
+
+K-Engine 提供了多种智能分块策略：
+
+```python
+# 层级分块（保留文档结构）
+engine = KnowledgeEngine(
+    enable_hierarchical_chunking=True,
+    chunk_size=1024,
+    chunk_overlap=128
+)
+
+# 语义分块（默认）
+engine = KnowledgeEngine(
+    enable_semantic_chunking=True,
+    chunk_size=512,
+    chunk_overlap=50
+)
+
+# 元数据增强（使用LLM生成摘要、问题等）
+engine = KnowledgeEngine(
+    enable_metadata_enhancement=True
+)
+```
+
+### 4. 完整配置选项
+
+```python
+engine = KnowledgeEngine(
+    # === 基础配置 ===
+    # LLM配置
+    llm_provider="deepseek",         # 可选: deepseek, qwen, openai
+    temperature=0.1,                 # 生成温度 (0-1)
+    max_tokens=2048,                 # 最大生成token数
     
-    # 处理查询...
+    # 嵌入模型配置
+    embedding_provider="dashscope",   # 可选: dashscope, openai
+    
+    # 向量库配置
+    persist_directory="./data/kb",    # 持久化目录
+    collection_name="my_knowledge",   # 集合名称
+    
+    # === 分块配置 ===
+    enable_hierarchical_chunking=False,  # 层级分块
+    enable_semantic_chunking=True,       # 语义分块
+    chunk_size=512,                      # 分块大小
+    chunk_overlap=50,                    # 分块重叠
+    enable_metadata_enhancement=False,   # 元数据增强
+    
+    # === 检索配置 ===
+    retrieval_strategy="hybrid",      # 可选: vector, bm25, hybrid
+    retrieval_top_k=10,              # 检索文档数量
+    vector_weight=0.7,               # 向量检索权重
+    bm25_weight=0.3,                 # BM25权重
+    fusion_method="weighted",         # 融合方法: weighted, rrf
+    
+    # === BM25 配置 ===
+    bm25_provider="bm25s",           # 可选: bm25s, elasticsearch
+    language="zh",                   # BM25语言: en, zh, multi
+    bm25_k1=1.5,                    # BM25 k1参数
+    bm25_b=0.75,                    # BM25 b参数
+    elasticsearch_url=None,          # Elasticsearch URL（如果使用）
+    
+    # === 查询扩展 ===
+    enable_query_expansion=False,     # 启用查询扩展
+    query_expansion_method="llm",     # 扩展方法: llm, rule_based
+    query_expansion_count=3,          # 扩展数量
+    
+    # === 重排序 ===
+    enable_reranking=False,           # 启用重排序
+    reranker_provider="huggingface",  # 可选: huggingface, api
+    reranker_model="qwen3-reranker-8b",  # 重排序模型
+    reranker_api_provider=None,       # API提供商: dashscope, cohere, jina
+    use_fp16=True,                   # 使用半精度（节省内存）
+    rerank_top_k=5,                  # 重排后文档数
+    
+    # === 其他配置 ===
+    include_citations=True,           # 是否包含引用
+    citation_style="inline",          # 引用样式: inline, footnote
+    use_multi_vector=True             # 多向量索引
+)
+```
+
+### 5. 高级使用示例
+
+#### 完整的 RAG 优化配置
+
+```python
+# 方案1：本地高性能配置（适合36GB内存Mac）
+engine = KnowledgeEngine(
+    # 使用层级分块保留文档结构
+    enable_hierarchical_chunking=True,
+    enable_metadata_enhancement=True,
+    
+    # 混合检索：BM25S + 向量检索
+    retrieval_strategy="hybrid",
+    bm25_provider="bm25s",
+    language="zh",
+    
+    # 查询扩展
+    enable_query_expansion=True,
+    query_expansion_method="llm",
+    
+    # 使用本地Qwen重排序模型
+    enable_reranking=True,
+    reranker_provider="huggingface",
+    reranker_model="qwen3-reranker-8b",
+    use_fp16=True,
+    
+    # 其他优化
+    chunk_size=1024,
+    retrieval_top_k=20,  # 初始检索更多文档
+    rerank_top_k=5       # 重排后保留最相关的5个
+)
+
+# 方案2：云端API配置（资源受限场景）
+engine = KnowledgeEngine(
+    # 基础设置
+    retrieval_strategy="hybrid",
+    bm25_provider="bm25s",
+    
+    # 使用API重排序服务
+    enable_reranking=True,
+    reranker_provider="api",
+    reranker_api_provider="dashscope",
+    reranker_model="gte-rerank-v2",
+    
+    # 成本优化
+    retrieval_top_k=15,
+    rerank_top_k=5
+)
+
+# 添加文档
+result = await engine.add("docs/")
+print(f"处理了 {result['total_chunks']} 个文档块")
+
+# 智能问答
+answer = await engine.ask(
+    "RAG技术的主要优势是什么？",
+    return_details=True
+)
+
+print(f"答案: {answer['answer']}")
+print(f"使用了 {len(answer['contexts'])} 个相关文档")
+print(f"引用: {answer['citations']}")
 ```
 
 ## 🌐 REST API 服务
@@ -394,9 +576,15 @@ config = RAGConfig(
 - 合理设置分块大小（建议256-1024）
 
 ### 2. 检索优化
-- 使用混合检索提高召回率
-- 启用重排序提升精度
-- 合理设置top_k（建议3-10）
+- **混合检索策略**：K-Engine默认使用混合检索（hybrid），结合向量检索和BM25关键词检索
+- **BM25选择**：
+  - 开发测试：使用BM25S（轻量快速）
+  - 生产环境：数据量<100万用BM25S，>100万用Elasticsearch
+- **重排序优化**：
+  - 本地模型：BGE-M3（平衡）、Qwen3-8B（高精度）
+  - API服务：DashScope（推荐）、Cohere（英文场景）
+- **合理设置top_k**：初始检索15-20个，重排后保留3-5个
+- **向量索引优化**：使用ChromaDB的内置索引优化，自动处理大规模数据
 
 ### 3. 生成优化
 - 使用流式生成改善响应时间
@@ -424,8 +612,9 @@ pytest --cov=knowledge_core_engine --cov-report=html
 ```
 
 当前测试状态：
-- ✅ 264个测试全部通过
-- 📊 测试覆盖率 > 80%
+- ✅ 341个测试全部通过
+- 📊 测试覆盖率 62%
+- 🔧 包含单元测试、集成测试和端到端测试
 
 ## 🤝 贡献指南
 
@@ -457,6 +646,13 @@ pytest --cov=knowledge_core_engine --cov-report=html
 - [ChromaDB](https://github.com/chroma-core/chroma) - 向量存储
 - [DeepSeek](https://www.deepseek.com/) - LLM提供商
 - [DashScope](https://dashscope.aliyun.com/) - 嵌入和LLM服务
+
+## 📚 更多文档
+
+- [检索架构指南](docs/RETRIEVAL_ARCHITECTURE.md) - 详细的BM25和重排序架构说明
+- [配置指南](docs/CONFIGURATION_GUIDE.md) - 详细的配置系统说明
+- [高级功能](docs/ADVANCED_FEATURES.md) - 深入了解高级特性
+- [API文档](docs/API.md) - REST API接口文档
 
 ## 📞 联系我们
 

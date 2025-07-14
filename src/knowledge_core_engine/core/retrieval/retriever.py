@@ -111,8 +111,11 @@ class Retriever:
             top_k = self.config.retrieval_top_k
         
         # Apply query expansion if enabled
-        if self.config.extra_params.get("enable_query_expansion"):
-            query = await self._expand_query(query)
+        if self.config.enable_query_expansion:
+            expanded_queries = await self._expand_query(query)
+            if len(expanded_queries) > 1:
+                # Combine expanded queries
+                query = " ".join(expanded_queries)
         
         # Route to appropriate strategy
         strategy = RetrievalStrategy(self.config.retrieval_strategy)
@@ -187,8 +190,8 @@ class Retriever:
     ) -> List[RetrievalResult]:
         """Retrieve using hybrid strategy (vector + BM25)."""
         # Get weights
-        vector_weight = self.config.extra_params.get("vector_weight", 0.7)
-        bm25_weight = self.config.extra_params.get("bm25_weight", 0.3)
+        vector_weight = self.config.vector_weight
+        bm25_weight = self.config.bm25_weight
         
         # Perform both searches in parallel
         vector_task = self._vector_retrieve(query, top_k * 2, filters)
@@ -249,11 +252,89 @@ class Retriever:
         
         return combined_results
     
-    async def _expand_query(self, query: str) -> str:
-        """Expand query for better retrieval."""
-        # Placeholder for query expansion
-        # Could use LLM to generate synonyms, related terms, etc.
-        return query
+    async def _expand_query(self, query: str) -> List[str]:
+        """Expand query for better retrieval.
+        
+        Args:
+            query: Original query
+            
+        Returns:
+            List of expanded queries (including original)
+        """
+        expanded = [query]  # Always include original
+        
+        if self.config.query_expansion_method == "llm":
+            # Use LLM to generate related queries
+            try:
+                from ..generation.providers import create_llm_provider
+                
+                # Create a temporary LLM client for query expansion
+                llm_provider = await create_llm_provider(self.config)
+                
+                # Build prompt for query expansion
+                prompt = f"""为以下搜索查询生成{self.config.query_expansion_count - 1}个相关的搜索词或短语，
+这些词应该：
+1. 与原始查询相关但使用不同的表达方式
+2. 包含同义词或相关概念
+3. 帮助检索更多相关文档
+
+原始查询：{query}
+
+请直接返回相关查询，每行一个，不要编号或其他格式："""
+                
+                # Generate expanded queries
+                messages = [{"role": "user", "content": prompt}]
+                response = await llm_provider.generate(
+                    messages=messages,
+                    temperature=0.3,  # Lower temperature for more focused expansion
+                    max_tokens=200
+                )
+                
+                # Parse response
+                if response and "content" in response:
+                    lines = response["content"].strip().split("\n")
+                    for line in lines[:self.config.query_expansion_count - 1]:
+                        line = line.strip()
+                        if line and not line[0].isdigit():  # Skip numbered items
+                            expanded.append(line)
+                
+            except Exception as e:
+                logger.warning(f"Query expansion failed: {e}, using original query only")
+        
+        elif self.config.query_expansion_method == "rule_based":
+            # Simple rule-based expansion
+            # Add common synonyms and variations
+            import jieba
+            
+            # Tokenize query
+            tokens = list(jieba.cut(query))
+            
+            # Simple synonym mapping (in production, use a proper synonym dictionary)
+            synonyms = {
+                "什么": ["哪些", "何种"],
+                "如何": ["怎么", "怎样"],
+                "为什么": ["为何", "原因"],
+                "RAG": ["检索增强生成", "Retrieval Augmented Generation"],
+                "技术": ["方法", "技巧"],
+                "优势": ["优点", "好处", "长处"],
+                "问题": ["挑战", "困难", "难点"]
+            }
+            
+            # Generate variations
+            for token in tokens:
+                if token in synonyms:
+                    for synonym in synonyms[token][:self.config.query_expansion_count - 1]:
+                        variation = query.replace(token, synonym)
+                        if variation != query and variation not in expanded:
+                            expanded.append(variation)
+                            if len(expanded) >= self.config.query_expansion_count:
+                                break
+                
+                if len(expanded) >= self.config.query_expansion_count:
+                    break
+        
+        logger.info(f"Query expanded from '{query}' to {len(expanded)} variations")
+        return expanded
     
     def _normalize_score(self, score: float, source: str) -> float:
         """Normalize scores from different sources."""

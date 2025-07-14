@@ -48,6 +48,9 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "markdownify>=0.11.0",
     
+    # Text processing
+    "bm25s>=0.1.0",  # Fast and lightweight BM25 implementation
+    
     # LLM providers
     "dashscope>=1.14.0",
     "openai>=1.12.0",  # For DeepSeek API compatibility
@@ -89,6 +92,19 @@ huggingface = [
     "transformers>=4.36.0",
     "torch>=2.1.0",
     "sentence-transformers>=2.3.0",
+]
+
+reranker-hf = [
+    # For HuggingFace reranker models
+    "transformers>=4.36.0",
+    "torch>=2.1.0",
+    "FlagEmbedding>=1.2.0",  # For BGE models (recommended)
+    "sentence-transformers>=2.2.0",  # Alternative for BGE models
+]
+
+elasticsearch = [
+    # For Elasticsearch BM25 support
+    "elasticsearch>=8.0.0",
 ]
 
 [project.urls]

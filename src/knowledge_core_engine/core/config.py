@@ -1,4 +1,19 @@
-"""Configuration for RAG system."""
+"""Configuration for RAG system.
+
+This module provides the main configuration class for RAG-specific settings.
+It is the primary configuration interface for the KnowledgeCore Engine.
+
+Usage:
+    from knowledge_core_engine.core.config import RAGConfig
+    
+    config = RAGConfig(
+        llm_provider="deepseek",
+        embedding_provider="dashscope",
+        enable_reranking=True
+    )
+
+For environment settings (API keys, paths), see utils.config.get_settings().
+"""
 
 import os
 from typing import Optional, Dict, Any
@@ -43,18 +58,58 @@ class RAGConfig:
     collection_name: str = "knowledge_core"
     persist_directory: str = "./data/chroma_db"
     
+    # Chunking parameters
+    enable_hierarchical_chunking: bool = False  # Enable parent-child chunk relationships
+    enable_semantic_chunking: bool = True       # Enable semantic-aware chunking
+    chunk_size: int = 512
+    chunk_overlap: int = 50
+    enable_metadata_enhancement: bool = False   # Enable LLM-based metadata generation
+    
     # Retrieval parameters
     retrieval_strategy: str = "hybrid"  # vector, bm25, hybrid
     retrieval_top_k: int = 10
-    reranker_model: Optional[str] = None
-    reranker_provider: Optional[str] = None
+    
+    # Hybrid retrieval parameters
+    vector_weight: float = 0.7          # Weight for vector search (0-1)
+    bm25_weight: float = 0.3           # Weight for BM25 search (0-1)
+    fusion_method: str = "weighted"     # weighted, rrf (reciprocal rank fusion)
+    
+    # BM25 parameters
+    bm25_provider: str = "bm25s"        # bm25s, elasticsearch, none
+    bm25_k1: float = 1.5               # BM25 k1 parameter
+    bm25_b: float = 0.75               # BM25 b parameter
+    bm25_epsilon: float = 0.25         # BM25 epsilon parameter
+    language: str = "en"               # Language for tokenization (en, zh, multi)
+    
+    # Elasticsearch parameters (if using elasticsearch provider)
+    elasticsearch_url: Optional[str] = None
+    elasticsearch_index: str = "knowledge_core"
+    elasticsearch_username: Optional[str] = None
+    elasticsearch_password: Optional[str] = None
+    
+    # Query expansion parameters
+    enable_query_expansion: bool = False
+    query_expansion_method: str = "llm"  # llm, rule_based
+    query_expansion_count: int = 3       # Number of expanded queries
+    
+    # Reranking parameters
+    enable_reranking: bool = False
+    reranker_provider: str = "huggingface"  # huggingface, api, none
+    reranker_model: Optional[str] = None    # Model name (e.g., bge-reranker-v2-m3, qwen3-reranker-8b)
+    reranker_api_provider: Optional[str] = None  # dashscope, cohere, jina (for api provider)
     reranker_api_key: Optional[str] = None
+    rerank_top_k: int = 5               # Number of documents to keep after reranking
+    use_fp16: bool = True               # Use half precision for HuggingFace models
+    reranker_device: Optional[str] = None  # Device for HuggingFace models (None = auto)
     
-    # Features
-    use_multi_vector: bool = True
+    # Citation parameters
     include_citations: bool = True
+    citation_style: str = "inline"       # inline, footnote, endnote
     
-    # Advanced options
+    # Multi-vector parameters
+    use_multi_vector: bool = True        # Index multiple representations per chunk
+    
+    # Deprecated - will be removed in future version
     extra_params: Dict[str, Any] = field(default_factory=dict)
     
     def __post_init__(self):
@@ -82,14 +137,32 @@ class RAGConfig:
         if not self.embedding_dimensions:
             self.embedding_dimensions = self._get_default_dimensions()
         
-        # Set default reranker if not specified
-        if not self.reranker_model and self.retrieval_strategy in ["hybrid"]:
-            self.reranker_model = "bge-reranker-v2-m3-qwen"
-            self.reranker_provider = "huggingface"
+        # Set default reranker if reranking is enabled
+        if self.enable_reranking and not self.reranker_model:
+            self.reranker_model = "bge-reranker-v2-m3"
+        
+        # Set reranker API provider based on model if not specified
+        if self.reranker_provider == "api" and not self.reranker_api_provider:
+            if self.reranker_model and "gte-rerank" in self.reranker_model:
+                self.reranker_api_provider = "dashscope"
+            else:
+                self.reranker_api_provider = "dashscope"  # Default
         
         # Load reranker API key if needed
-        if self.reranker_provider and not self.reranker_api_key:
-            self.reranker_api_key = os.getenv(f"{self.reranker_provider.upper()}_API_KEY")
+        if self.reranker_provider == "api" and self.reranker_api_provider:
+            if not self.reranker_api_key:
+                self.reranker_api_key = os.getenv(f"{self.reranker_api_provider.upper()}_API_KEY")
+        
+        # Set default retrieval strategy based on BM25 provider
+        if self.bm25_provider == "none" and self.retrieval_strategy == "hybrid":
+            self.retrieval_strategy = "vector"  # Fallback to vector-only
+        
+        # Load Elasticsearch credentials if needed
+        if self.bm25_provider == "elasticsearch":
+            if not self.elasticsearch_username:
+                self.elasticsearch_username = os.getenv("ELASTICSEARCH_USERNAME")
+            if not self.elasticsearch_password:
+                self.elasticsearch_password = os.getenv("ELASTICSEARCH_PASSWORD")
     
     def _get_default_llm_model(self) -> str:
         """Get default model for LLM provider."""
@@ -143,3 +216,53 @@ class RAGConfig:
         
         if self.embedding_provider not in ["huggingface", "local"] and not self.embedding_api_key:
             raise ValueError(f"API key required for {self.embedding_provider}")
+        
+        # Validate new parameters
+        if self.retrieval_strategy not in ["vector", "bm25", "hybrid"]:
+            raise ValueError(f"Invalid retrieval strategy: {self.retrieval_strategy}")
+        
+        if self.fusion_method not in ["weighted", "rrf"]:
+            raise ValueError(f"Invalid fusion method: {self.fusion_method}")
+        
+        if self.query_expansion_method not in ["llm", "rule_based"]:
+            raise ValueError(f"Invalid query expansion method: {self.query_expansion_method}")
+        
+        if self.citation_style not in ["inline", "footnote", "endnote"]:
+            raise ValueError(f"Invalid citation style: {self.citation_style}")
+        
+        # Validate BM25 parameters
+        if self.bm25_provider not in ["bm25s", "elasticsearch", "none"]:
+            raise ValueError(f"Invalid BM25 provider: {self.bm25_provider}")
+        
+        if self.bm25_provider == "elasticsearch" and not self.elasticsearch_url:
+            raise ValueError("elasticsearch_url required when using elasticsearch provider")
+        
+        # Validate reranker parameters
+        if self.reranker_provider not in ["huggingface", "api", "none"]:
+            raise ValueError(f"Invalid reranker provider: {self.reranker_provider}")
+        
+        if self.reranker_provider == "api" and not self.reranker_api_provider:
+            raise ValueError("reranker_api_provider required when using api provider")
+        
+        if self.reranker_api_provider and self.reranker_api_provider not in ["dashscope", "cohere", "jina"]:
+            raise ValueError(f"Invalid reranker API provider: {self.reranker_api_provider}")
+        
+        # Validate weights
+        if not 0 <= self.vector_weight <= 1:
+            raise ValueError("vector_weight must be between 0 and 1")
+        
+        if not 0 <= self.bm25_weight <= 1:
+            raise ValueError("bm25_weight must be between 0 and 1")
+        
+        if self.retrieval_strategy == "hybrid" and abs(self.vector_weight + self.bm25_weight - 1.0) > 0.01:
+            raise ValueError("For hybrid retrieval, vector_weight + bm25_weight should equal 1.0")
+        
+        # Validate chunk parameters
+        if self.chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        
+        if self.chunk_overlap < 0:
+            raise ValueError("chunk_overlap must be non-negative")
+        
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be less than chunk_size")

@@ -1,4 +1,16 @@
-"""Configuration management for KnowledgeCore Engine."""
+"""Configuration management for KnowledgeCore Engine.
+
+This module handles environment-based configuration using Pydantic Settings.
+It manages API keys, file paths, and application-level settings from .env files.
+
+Usage:
+    from knowledge_core_engine.utils.config import get_settings
+    
+    settings = get_settings()
+    api_key = settings.dashscope_api_key
+
+For RAG-specific configuration, see core.config.RAGConfig.
+"""
 
 from functools import lru_cache
 from pathlib import Path

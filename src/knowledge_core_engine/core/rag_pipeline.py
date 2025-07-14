@@ -1,7 +1,13 @@
 """Unified RAG pipeline with configurable providers.
 
-This module provides a complete RAG pipeline that can be configured
-to use different providers for each component.
+[EXPERIMENTAL] This module provides an alternative RAG pipeline implementation
+that supports provider-based configuration and YAML config files.
+
+Note: For most use cases, we recommend using KnowledgeEngine instead,
+which provides a simpler and more feature-rich interface.
+
+This module is kept for backward compatibility and advanced use cases
+that require direct provider control.
 """
 
 from typing import List, Dict, Any, Optional
@@ -15,8 +21,12 @@ from .chunking.base import ChunkResult
 
 
 @dataclass
-class RAGConfig:
-    """RAG pipeline configuration."""
+class PipelineConfig:
+    """RAG pipeline configuration for provider-based pipeline.
+    
+    Note: This is different from core.config.RAGConfig.
+    This config is specific to the provider-based pipeline implementation.
+    """
     config_file: Optional[str] = None
     llm_provider: str = "deepseek"
     embedding_provider: str = "dashscope"
@@ -48,15 +58,19 @@ class RAGConfig:
 
 
 class RAGPipeline:
-    """Complete RAG pipeline with configurable providers."""
+    """Complete RAG pipeline with configurable providers.
     
-    def __init__(self, config: Optional[RAGConfig] = None):
+    This is an alternative implementation to KnowledgeEngine that provides
+    more direct control over providers but requires more manual configuration.
+    """
+    
+    def __init__(self, config: Optional[PipelineConfig] = None):
         """Initialize RAG pipeline.
         
         Args:
-            config: RAG configuration (uses defaults if not provided)
+            config: Pipeline configuration (uses defaults if not provided)
         """
-        self.config = config or RAGConfig()
+        self.config = config or PipelineConfig()
         self._llm: Optional[LLMProvider] = None
         self._embedder: Optional[EmbeddingProvider] = None
         self._vectordb: Optional[VectorDBProvider] = None
@@ -256,18 +270,25 @@ class RAGPipeline:
 # --- Usage Example ---
 """
 # Method 1: Use with configuration file
-config = RAGConfig(config_file="config/providers.yaml")
+config = PipelineConfig(config_file="config/providers.yaml")
 pipeline = RAGPipeline(config)
 await pipeline.initialize()
 
 # Method 2: Direct configuration
-config = RAGConfig(
+config = PipelineConfig(
     llm_provider="deepseek",
     embedding_provider="dashscope",
     vectordb_provider="chromadb",
     embedding_strategy="multi_vector"
 )
 pipeline = RAGPipeline(config)
+
+# Method 3: Use KnowledgeEngine (Recommended)
+from knowledge_core_engine import KnowledgeEngine
+engine = KnowledgeEngine(
+    llm_provider="deepseek",
+    embedding_provider="dashscope"
+)
 await pipeline.initialize()
 
 # Add knowledge
