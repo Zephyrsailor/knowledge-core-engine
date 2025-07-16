@@ -138,20 +138,49 @@ Thumbs.db
 # Project specific
 data/cache/
 data/chroma_db/
+data/knowledge_base
 data/kb/
-data/source_docs/*
+data/api_chroma_db/
 !data/source_docs/.gitkeep
 data/golden_set/*
-!data/golden_set/.gitkeep
+!data/golden_set/rag_test_set.json
+!data/golden_set/rag_qa_dataset.json
 logs/
 *.log
+evaluation_results/
+
+# Database files
+*.sqlite3
+*.db
+chroma.sqlite3
+
+# Cache directories
+**/cache/
+**/__pycache__/
+.cache/
+
+# Model cache
+models/
+.huggingface/
+
+# Test output
+test_output/
+test_results/
+
+# Evaluation results
+evaluation_results/
+evaluation_*.json
 
 # Temporary files
 *.tmp
 *.temp
+*.bak
 .~*
 
 # API keys and secrets
 *.key
 *.pem
 secrets/
+
+# Ruff cache
+.ruff_cache/

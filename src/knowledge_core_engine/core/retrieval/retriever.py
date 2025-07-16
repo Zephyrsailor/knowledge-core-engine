@@ -235,16 +235,6 @@ class Retriever:
         
         return results
     
-    async def _bm25_search(
-        self,
-        query: str,
-        top_k: int,
-        filters: Optional[Dict[str, Any]] = None
-    ) -> List[Dict[str, Any]]:
-        """Perform BM25 search."""
-        # Placeholder for BM25 implementation
-        # In real implementation, would use a BM25 index (e.g., Whoosh, Elasticsearch)
-        return []
     
     async def _hybrid_retrieve(
         self,

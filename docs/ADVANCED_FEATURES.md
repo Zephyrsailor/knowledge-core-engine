@@ -239,6 +239,85 @@ results = await engine.search_batch([
 max_concurrent_requests=10  # 最大并发请求数
 ```
 
+## 评估系统
+
+K-Engine 提供了完整的评估框架，支持使用 Ragas 等工具对 RAG 系统进行全面评估。
+
+### 评估指标
+
+1. **忠实度 (Faithfulness)**：答案是否基于检索的内容
+2. **答案相关性 (Answer Relevancy)**：答案是否回答了用户的问题
+3. **上下文精确度 (Context Precision)**：检索的文档是否相关
+4. **上下文召回率 (Context Recall)**：相关信息是否都被检索到
+
+### 使用 Ragas 评估
+
+```python
+from knowledge_core_engine.core.evaluation import (
+    create_ragas_evaluator, 
+    RagasConfig,
+    TestCase
+)
+
+# 配置 Ragas
+config = RagasConfig(
+    llm_provider="deepseek",
+    embedding_provider="dashscope",
+    metrics=[
+        "faithfulness",
+        "answer_relevancy",
+        "context_precision",
+        "context_recall"
+    ]
+)
+
+# 创建评估器
+evaluator = await create_ragas_evaluator(config)
+
+# 准备测试用例
+test_case = TestCase(
+    question="什么是RAG？",
+    ground_truth="RAG是检索增强生成技术...",
+    contexts=contexts,  # 检索到的上下文
+    generated_answer=answer  # 生成的答案
+)
+
+# 运行评估
+result = await evaluator.evaluate_single(test_case)
+```
+
+### 使用黄金测试集
+
+K-Engine 提供了标准的黄金测试集用于系统评估：
+
+```python
+from examples.evaluate_with_golden_set import GoldenSetEvaluator
+
+# 创建评估器
+evaluator = GoldenSetEvaluator(
+    engine=engine,
+    golden_set_path="data/golden_set/rag_test_set.json"
+)
+
+# 准备测试用例
+await evaluator.prepare_test_cases()
+
+# 运行评估
+report = await evaluator.evaluate(ragas_config)
+
+# 查看结果
+print(f"总体平均分: {report['overall']['mean']:.3f}")
+```
+
+### 快速评估
+
+使用内置的快速评估脚本：
+
+```bash
+# 运行快速评估
+python scripts/quick_evaluate.py
+```
+
 ## 最佳实践建议
 
 ### 1. 文档类型选择

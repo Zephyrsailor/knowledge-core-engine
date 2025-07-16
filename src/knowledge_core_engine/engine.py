@@ -45,7 +45,7 @@ class KnowledgeEngine:
     
     def __init__(
         self,
-        llm_provider: str = "deepseek",
+        llm_provider: Optional[str] = None,  # Will use default from RAGConfig
         embedding_provider: str = "dashscope", 
         persist_directory: str = "./data/knowledge_base",
         log_level: Optional[str] = None,
@@ -66,9 +66,15 @@ class KnowledgeEngine:
             setup_logger("knowledge_core_engine", log_level=log_level)
             logger.info(f"Log level set to {log_level}")
         # 自动从环境变量读取API密钥
+        # 创建配置，如果llm_provider为None，RAGConfig将使用默认值
+        config_args = {}
+        if llm_provider is not None:
+            config_args['llm_provider'] = llm_provider
+        if kwargs.get('llm_api_key'):
+            config_args['llm_api_key'] = kwargs.get('llm_api_key')
+        
         self.config = RAGConfig(
-            llm_provider=llm_provider,
-            llm_api_key=kwargs.get('llm_api_key') or os.getenv(f"{llm_provider.upper()}_API_KEY"),
+            **config_args,
             embedding_provider=embedding_provider,
             embedding_api_key=kwargs.get('embedding_api_key') or os.getenv(
                 "DASHSCOPE_API_KEY" if embedding_provider == "dashscope" 

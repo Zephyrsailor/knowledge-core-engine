@@ -9,7 +9,7 @@
 
 🚀 **企业级RAG知识引擎** - 构建准确、可追溯、高性能的知识问答系统
 
-[快速开始](#快速开始) | [核心特性](#核心特性) | [安装指南](#安装指南) | [API文档](#rest-api-服务)
+[快速开始](#快速开始) | [核心特性](#核心特性) | [安装指南](#安装指南) | [评测优化](#评测与优化) | [API文档](#rest-api-服务)
 
 </div>
 
@@ -142,7 +142,7 @@ async def main():
     engine = KnowledgeEngine()
     
     # 添加文档
-    await engine.add("docs/")
+    await engine.add("data/source_docs/")
     
     # 提问
     answer = await engine.ask("什么是RAG技术？")
@@ -387,6 +387,131 @@ eventSource.onmessage = (event) => {
 };
 ```
 
+## 评测与优化
+
+K-Engine 提供了完善的评测框架，帮助您评估和优化RAG系统的性能。
+
+### 评测框架概述
+
+K-Engine提供两种评测方式：
+
+1. **快速评测**：基于关键词覆盖率的简化评测，适合快速迭代
+2. **专业评测**：使用标准RAG评测指标，提供全面的性能分析
+
+### 快速开始评测
+
+```bash
+# 运行快速评测（推荐，使用Qwen-Turbo）
+python scripts/run_optimized_evaluation.py
+
+# 运行完整的Ragas评测（使用Qwen-Turbo）
+python scripts/run_full_evaluation.py
+
+# 运行简单测试
+python scripts/quick_evaluate.py
+```
+
+> 注意：所有评测脚本默认使用Qwen-Turbo模型以获得最佳性能。确保已配置`DASHSCOPE_API_KEY`。
+
+### 评测指标说明
+
+#### 1. 关键词覆盖率（快速评测）
+- **含义**：答案中包含的预期关键词比例
+- **目标**：> 60%
+- **用途**：快速判断答案是否包含关键信息
+
+#### 2. 标准RAG指标（专业评测）
+- **Faithfulness（忠实度）**：答案是否基于检索到的文档，避免幻觉
+- **Answer Relevancy（答案相关性）**：答案是否真正回答了问题
+- **Context Precision（上下文精确度）**：检索的文档是否都相关
+- **Context Recall（上下文召回率）**：是否检索到所有必要信息
+
+### 黄金测试集
+
+项目包含精心设计的黄金测试集：
+- 位置：`data/golden_set/rag_test_set.json`
+- 包含10个测试用例，覆盖RAG技术的各个方面
+- 每个用例包含：问题、参考答案、预期关键词、难度等级
+
+### 如何解读评测结果
+
+```json
+{
+  "summary": {
+    "total_tests": 10,
+    "success_rate": 100.0
+  },
+  "performance": {
+    "avg_response_time": 3.95,  // 平均响应时间（秒）
+    "under_5s": 6               // 5秒内完成的测试数
+  },
+  "quality": {
+    "avg_keyword_coverage": 39.1  // 关键词覆盖率（%）
+  },
+  "category_analysis": {
+    "概念理解": {"avg_coverage": 100.0},
+    "技术细节": {"avg_coverage": 16.7}
+  }
+}
+```
+
+### 优化建议
+
+根据评测结果进行针对性优化：
+
+1. **响应时间慢**（>5秒）
+   - 切换到更快的LLM（如qwen-turbo）
+   - 减少retrieval_top_k
+   - 关闭不必要的功能（如查询扩展）
+
+2. **关键词覆盖率低**（<60%）
+   - 增加retrieval_top_k获取更多上下文
+   - 优化生成提示词，强调关键信息提取
+   - 启用查询扩展功能
+
+3. **特定类别表现差**
+   - 检查该类别文档是否正确索引
+   - 调整该类别的检索策略
+   - 优化分块大小
+
+### 自定义评测
+
+```python
+# 创建自定义测试用例
+from knowledge_core_engine import KnowledgeEngine
+
+async def custom_evaluation():
+    engine = KnowledgeEngine()
+    
+    # 自定义测试用例
+    test_cases = [
+        {
+            "question": "你的业务问题",
+            "expected_keywords": ["关键词1", "关键词2"],
+            "category": "业务类别"
+        }
+    ]
+    
+    # 运行评测
+    for case in test_cases:
+        result = await engine.ask(case["question"])
+        # 分析结果...
+```
+
+### 持续优化流程
+
+1. **建立基准线**：首次运行评测，记录各项指标
+2. **迭代优化**：根据评测结果调整配置
+3. **验证改进**：重新评测，对比指标变化
+4. **监控退化**：定期运行评测，确保性能不退化
+
+### 评测结果存储
+
+评测结果会自动保存到文件中：
+- 位置：`evaluation_results/` 目录
+- 格式：`evaluation_qwen_turbo_YYYYMMDD_HHMMSS.json`
+- 内容：包含完整的测试结果、性能指标和质量分析
+
 ## 系统架构
 
 ```
@@ -487,6 +612,8 @@ pytest --cov=knowledge_core_engine --cov-report=html
 
 - [配置指南](docs/CONFIGURATION_GUIDE.md) - 详细的配置系统说明
 - [高级功能](docs/ADVANCED_FEATURES.md) - 深入了解高级特性
+- [专业评测指南](docs/EVALUATION_GUIDE.md) - 完整的RAG系统评测方案
+- [检索架构](docs/RETRIEVAL_ARCHITECTURE.md) - 深入理解检索系统设计
 
 
 ---
