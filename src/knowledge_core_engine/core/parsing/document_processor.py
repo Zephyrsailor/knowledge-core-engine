@@ -111,6 +111,7 @@ class DocumentProcessor:
             ValueError: If file type is not supported
         """
         # Validate file exists
+        file_path = Path(file_path)
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         
