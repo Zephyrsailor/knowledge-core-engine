@@ -247,7 +247,7 @@ async def compare_configs():
     print("配置比较功能已移除，请直接运行评测。")
 
 
-async def main():
+def main():
     """主函数"""
     import argparse
     
@@ -262,17 +262,21 @@ async def main():
     
     args = parser.parse_args()
     
-    if args.compare:
-        await compare_configs()
-    else:
-        await run_evaluation(
-            config_profile=args.config,
-            dataset_path=args.dataset,
-            num_samples=args.samples,
-            metrics=args.metrics,
-            output_dir=args.output
-        )
+    # 在解析参数后才运行异步代码
+    async def async_main():
+        if args.compare:
+            await compare_configs()
+        else:
+            await run_evaluation(
+                config_profile=args.config,
+                dataset_path=args.dataset,
+                num_samples=args.samples,
+                metrics=args.metrics,
+                output_dir=args.output
+            )
+    
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
