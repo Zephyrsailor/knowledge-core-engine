@@ -89,26 +89,27 @@ class BM25SRetriever(BaseBM25Retriever):
         
         # Tokenize documents
         if self.language == "zh":
-            # For Chinese, use character-level tokenization as default
-            # BM25S will handle it appropriately
-            self._corpus_tokens = self._bm25s.tokenize(
-                self._documents,
-                stopwords=None,  # Can add Chinese stopwords if needed
-                stemmer=None
-            )
+            # For Chinese, use jieba for tokenization
+            import jieba
+            # Tokenize each document with jieba
+            self._corpus_tokens = []
+            for doc in self._documents:
+                # Use jieba to tokenize directly
+                tokens = list(jieba.cut(doc))
+                self._corpus_tokens.append(tokens)
         else:
             # For English and other languages
             self._corpus_tokens = self._bm25s.tokenize(
                 self._documents,
                 stopwords="en" if self.language == "en" else None,
-                stemmer="porter" if self.language == "en" else None
+                stemmer=None,  # Avoid stemmer issues
+                show_progress=False
             )
         
         # Create and index the retriever
         self._retriever = self._bm25s.BM25(
             k1=self.k1,
-            b=self.b,
-            epsilon=self.epsilon
+            b=self.b
         )
         self._retriever.index(self._corpus_tokens)
         
@@ -129,16 +130,15 @@ class BM25SRetriever(BaseBM25Retriever):
         
         # Tokenize query
         if self.language == "zh":
-            query_tokens = self._bm25s.tokenize(
-                query,
-                stopwords=None,
-                stemmer=None
-            )
+            # Use jieba for Chinese query tokenization
+            import jieba
+            query_tokens = [list(jieba.cut(query))]  # BM25S expects list of token lists
         else:
             query_tokens = self._bm25s.tokenize(
                 query,
                 stopwords="en" if self.language == "en" else None,
-                stemmer="porter" if self.language == "en" else None
+                stemmer=None,  # Avoid stemmer issues
+                show_progress=False
             )
         
         # Retrieve documents

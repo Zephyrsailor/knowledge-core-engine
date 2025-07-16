@@ -106,9 +106,20 @@ class DashScopeEmbeddingProvider(EmbeddingProvider):
     async def embed(self, text: str) -> EmbeddingResult:
         """Embed using DashScope API."""
         # Placeholder implementation
+        import numpy as np
+        
+        # Generate mock embedding
+        embedding = np.random.randn(self.dimensions).tolist()
+        
+        # Normalize the embedding if configured
+        if self.config.normalize:
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = (np.array(embedding) / norm).tolist()
+        
         return EmbeddingResult(
             text=text,
-            embedding=[0.1] * self.dimensions,
+            embedding=embedding,
             model=self.model,
             usage={"tokens": len(text.split())}
         )
@@ -150,9 +161,20 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     
     async def embed(self, text: str) -> EmbeddingResult:
         """Embed using OpenAI API."""
+        import numpy as np
+        
+        # Generate mock embedding
+        embedding = np.random.randn(self.dimensions).tolist()
+        
+        # OpenAI embeddings are normalized by default, but ensure consistency
+        if self.config.normalize:
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = (np.array(embedding) / norm).tolist()
+        
         return EmbeddingResult(
             text=text,
-            embedding=[0.2] * self.dimensions,
+            embedding=embedding,
             model=self.model,
             usage={"tokens": len(text.split())}
         )
@@ -193,10 +215,20 @@ class HuggingFaceEmbeddingProvider(EmbeddingProvider):
     
     async def embed(self, text: str) -> EmbeddingResult:
         """Embed using local model."""
-        # Placeholder
+        import numpy as np
+        
+        # Generate mock embedding
+        embedding = np.random.randn(self.dimensions).tolist()
+        
+        # Most sentence transformers return normalized embeddings
+        if self.config.normalize:
+            norm = np.linalg.norm(embedding)
+            if norm > 0:
+                embedding = (np.array(embedding) / norm).tolist()
+        
         return EmbeddingResult(
             text=text,
-            embedding=[0.3] * self.dimensions,
+            embedding=embedding,
             model=self.model,
             usage={"tokens": 0}  # Local model, no token cost
         )

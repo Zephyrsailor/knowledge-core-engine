@@ -12,6 +12,11 @@ class ParseResult:
     
     markdown: str
     metadata: Dict[str, Any]
+    
+    @property
+    def content(self) -> str:
+        """Alias for markdown to maintain compatibility."""
+        return self.markdown
 
 
 class BaseParser(ABC):

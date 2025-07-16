@@ -363,10 +363,26 @@ class Generator:
             # Map index to context (1-based indexing)
             if 1 <= idx <= len(contexts):
                 context = contexts[idx - 1]
+                # 获取文档标题
+                doc_title = context.metadata.get("document_title") or context.metadata.get("source") or context.metadata.get("file_path", "Unknown")
+                
+                # 如果有层级信息，添加章节路径
+                if 'hierarchy' in context.metadata:
+                    hierarchy = context.metadata['hierarchy']
+                    if isinstance(hierarchy, str):
+                        import json
+                        hierarchy = json.loads(hierarchy)
+                    
+                    # 获取层级路径
+                    if 'hierarchy_path' in hierarchy and len(hierarchy['hierarchy_path']) > 1:
+                        # 跳过第一级（通常是文档标题）
+                        section_path = ' > '.join(hierarchy['hierarchy_path'][1:])
+                        doc_title = f"{doc_title} - {section_path}"
+                
                 citation = CitationReference(
                     index=idx,
                     chunk_id=context.chunk_id,
-                    document_title=context.metadata.get("document_title") or context.metadata.get("source") or context.metadata.get("file_path", "Unknown"),
+                    document_title=doc_title,
                     page=context.metadata.get("page"),
                     text=context.content[:200] + "..." if len(context.content) > 200 else context.content
                 )

@@ -92,7 +92,61 @@
 
 ---
 
-## 2. 完整的RAG生命周期：K-Engine的七大支柱
+## 2. Provider架构：统一的服务接口
+
+K-Engine采用Provider架构来统一管理外部服务（LLM、Embedding、VectorDB等）的接入。这种设计确保了系统的灵活性和可扩展性。
+
+### Provider架构设计
+
+```python
+# 基础Provider接口
+class Provider(ABC):
+    @abstractmethod
+    async def initialize(self): pass
+    
+    @abstractmethod
+    async def close(self): pass
+
+# 工厂模式注册和创建
+ProviderFactory.register("llm", "deepseek", DeepSeekProvider)
+provider = ProviderFactory.create("llm", config)
+```
+
+### 已实现的Providers
+
+1. **LLM Providers**
+   - DeepSeek（完整实现，包括流式输出）
+   - Qwen（通义千问）
+   - OpenAI兼容接口
+
+2. **Embedding Providers**（待实现）
+   - DashScope (qwen-text-embedding-v3)
+   - OpenAI兼容接口
+
+3. **VectorDB Providers**（待实现）
+   - ChromaDB
+   - Milvus（可选）
+
+### Provider使用示例
+
+```python
+# 配置
+config = {
+    "provider": "deepseek",
+    "api_key": "sk-xxx",  # 或从环境变量获取
+    "model": "deepseek-chat",
+    "temperature": 0.1
+}
+
+# 创建并使用
+llm = ProviderFactory.create("llm", config)
+await llm.initialize()
+response = await llm.complete("你的提示词")
+```
+
+---
+
+## 3. 完整的RAG生命周期：K-Engine的七大支柱
 
 ### 支柱1：摄入与解析（"前门"）
 
@@ -130,8 +184,9 @@ def intelligent_chunking(markdown: str, metadata: Dict) -> List[TextNode]:
 **目标**：用机器生成的理解层丰富每个块，将其从原始文本转换为智能"知识资产"。
 
 **关键工具**：
-- LLM API (DeepSeek/Qwen)
+- LLM Provider架构（支持DeepSeek/Qwen/OpenAI）
 - `Pydantic` 用于结构化输出
+- 异步并发处理
 
 **核心逻辑**：
 ```python
@@ -140,6 +195,10 @@ class ChunkMetadata(BaseModel):
     questions: List[str]  # 3-5个潜在问题
     chunk_type: str  # 分类标签
     keywords: List[str]  # 关键词提取
+
+# 使用Provider架构
+enhancer = MetadataEnhancer(config)
+enhanced_chunks = await enhancer.enhance_batch(chunks)
 ```
 
 ### 支柱4：嵌入与索引（"图书馆目录"）
@@ -279,20 +338,27 @@ knowledge-core-engine/
 # 核心框架
 framework: llama_index
 api_framework: fastapi
+provider_architecture: true  # 统一的Provider接口
 
 # 文档处理
 parsing:
   primary: llama_parse
   fallback: [pymupdf, python-docx, beautifulsoup4]
 
-# 向量化
+# 向量化（通过Provider架构）
 embedding:
-  provider: dashscope
-  model: text-embedding-v3
-  dimensions: 1536
+  providers:
+    - name: dashscope
+      model: text-embedding-v3
+      dimensions: 1536
+    - name: openai  # 兼容接口
 
-# 存储
-vector_database: chromadb
+# 存储（通过Provider架构）
+vector_database:
+  providers:
+    - name: chromadb
+      persist: true
+    - name: milvus  # 可选
 document_store: sqlite  # 用于元数据
 
 # 检索增强
@@ -300,10 +366,16 @@ reranker:
   model: bge-reranker-v2-m3-qwen
   provider: huggingface
 
-# 生成
+# 生成（通过Provider架构）
 llm:
-  primary: deepseek-v3
-  fallback: qwen2.5-72b-instruct
+  providers:
+    - name: deepseek
+      model: deepseek-chat
+      api_base: https://api.deepseek.com/v1
+    - name: qwen
+      model: qwen2.5-72b-instruct
+      api_base: https://dashscope.aliyuncs.com/api/v1
+    - name: openai  # 兼容任何OpenAI格式API
   temperature: 0.1  # 知识库场景需要准确性
 
 # 评估
@@ -415,6 +487,167 @@ uvicorn knowledge_core_engine.api.app:app --reload
 - **严禁任何测试脚本**：必要时走测试用例
 - 所有测试必须遵循项目的测试流程
 - 测试用例必须经过严格审查和批准
+
+### 8.2 集成开发规则 - 防止"实现但未连接"问题
+
+#### 核心原则：**No Integration, No Feature（没有集成，就没有功能）**
+
+为了防止出现"功能已实现但未使用"的问题，所有开发必须遵循以下规则：
+
+#### 8.2.1 禁止占位符实现
+
+```python
+# ❌ 错误：占位符实现
+async def _bm25_retrieve(self, query, top_k):
+    # TODO: implement BM25
+    return []  # 绝对禁止！
+
+# ✅ 正确：抛出明确异常
+async def _bm25_retrieve(self, query, top_k):
+    raise NotImplementedError(
+        "BM25 retrieval not implemented. "
+        "Please integrate BM25SearchEngine from retrieval.bm25 module"
+    )
+```
+
+#### 8.2.2 强制集成测试
+
+每个功能模块必须包含三层测试：
+
+1. **单元测试**：测试模块功能（可以使用mock）
+2. **集成测试**：测试模块间连接（禁止mock核心功能）
+3. **端到端测试**：测试完整用户流程（必须真实运行）
+
+```python
+# tests/integration/test_retrieval_integration.py
+async def test_bm25_actually_works():
+    """测试BM25真正被调用，而不是返回空"""
+    engine = KnowledgeEngine(retrieval_strategy="bm25")
+    await engine.add_documents(["文档1", "文档2"])
+    results = await engine.search("文档")
+    
+    # 必须有结果，不能是空列表
+    assert len(results) > 0
+    assert results[0].score > 0  # BM25分数不应为0
+```
+
+#### 8.2.3 功能连接检查清单
+
+实现新功能时，必须完成以下检查：
+
+- [ ] **模块实现**：功能模块本身工作正常
+- [ ] **集成点确认**：找到所有需要调用此功能的地方
+- [ ] **实际连接**：在集成点调用新功能，而非占位符
+- [ ] **配置生效**：相关配置项真正控制功能开关
+- [ ] **日志验证**：运行时日志显示功能被调用
+- [ ] **端到端测试**：从用户入口验证功能工作
+
+#### 8.2.4 查询流程完整性规则
+
+对于RAG查询流程，必须确保每个环节真正工作：
+
+```python
+# 必须在 engine.ask() 或 retriever.retrieve() 中验证：
+1. 查询扩展：扩展的查询必须被独立使用，不是简单拼接
+2. 混合检索：BM25和向量检索都必须返回结果
+3. 元数据使用：生成的元数据必须参与检索或排序
+4. 层级关系：父子关系必须影响最终结果
+```
+
+#### 8.2.5 代码审查规则
+
+PR必须包含以下内容才能合并：
+
+1. **集成证明**：展示功能在主流程中被调用的代码
+2. **运行日志**：实际运行的日志，显示新功能工作
+3. **测试覆盖**：包括集成测试，不只是单元测试
+4. **无占位符**：确认没有TODO或占位符返回
+
+#### 8.2.6 监控与告警
+
+```python
+# 在关键集成点添加监控
+async def _hybrid_retrieve(self, query, top_k):
+    vector_results = await self._vector_retrieve(query, top_k)
+    bm25_results = await self._bm25_retrieve(query, top_k)
+    
+    # 监控：如果配置了混合但BM25返回空，必须告警
+    if self.config.retrieval_strategy == "hybrid" and not bm25_results:
+        logger.error(
+            "INTEGRATION ERROR: Hybrid retrieval configured but "
+            "BM25 returned no results. Check BM25 integration!"
+        )
+        # 在开发模式下直接抛出异常
+        if self.config.debug_mode:
+            raise RuntimeError("BM25 integration failure")
+    
+    return self._combine_results(vector_results, bm25_results)
+```
+
+#### 8.2.7 定期集成审计
+
+每个Sprint结束时，运行集成审计脚本：
+
+```python
+# scripts/integration_audit.py
+def audit_integrations():
+    """检查所有配置的功能是否真正集成"""
+    issues = []
+    
+    # 检查BM25
+    if "hybrid" in config.retrieval_strategies:
+        if not check_bm25_returns_results():
+            issues.append("BM25 configured but returns empty")
+    
+    # 检查查询扩展
+    if config.enable_query_expansion:
+        if not check_expanded_queries_used_separately():
+            issues.append("Query expansion not properly utilized")
+    
+    return issues
+```
+
+### 8.3 TDD增强规则
+
+#### 8.3.1 测试必须验证行为，不只是接口
+
+```python
+# ❌ 错误：只测试接口存在
+async def test_bm25_retrieve_exists():
+    retriever = Retriever(config)
+    assert hasattr(retriever, '_bm25_retrieve')
+
+# ✅ 正确：测试实际行为
+async def test_bm25_retrieve_returns_results():
+    retriever = Retriever(config)
+    await retriever.add_documents(test_docs)
+    results = await retriever._bm25_retrieve("test query", top_k=5)
+    assert len(results) > 0
+    assert all(isinstance(r, RetrievalResult) for r in results)
+    assert results[0].score > 0  # BM25 score should be positive
+```
+
+#### 8.3.2 集成测试优先原则
+
+在实现功能时，先写集成测试，确保功能在系统中的位置：
+
+```python
+# 1. 先写集成测试（会失败）
+async def test_metadata_used_in_retrieval():
+    """确保生成的元数据真正用于检索"""
+    engine = KnowledgeEngine()
+    
+    # 添加带元数据的文档
+    await engine.add("文档内容", enhance_metadata=True)
+    
+    # 搜索元数据中的问题
+    results = await engine.search("元数据中生成的问题")
+    
+    # 必须能检索到
+    assert len(results) > 0
+
+# 2. 然后实现功能让测试通过
+```
 
 ---
 

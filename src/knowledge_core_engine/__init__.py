@@ -38,12 +38,21 @@ except ImportError:
 __version__ = "0.1.0"
 __author__ = "Knowledge Core Team"
 
-from .engine import KnowledgeEngine, create_engine
-from .core.config import RAGConfig
+# 在导入其他模块之前设置日志系统
 from .utils.logger import setup_logger
 
-# Initialize logger
-logger = setup_logger(__name__)
+# 从环境变量读取日志级别（默认为INFO）
+log_level = os.getenv("LOG_LEVEL", "INFO")
+
+# 初始化全局日志系统
+logger = setup_logger("knowledge_core_engine", log_level=log_level)
+
+# 如果是DEBUG模式，显示当前配置
+if log_level == "DEBUG":
+    logger.debug(f"KnowledgeCore Engine initialized with LOG_LEVEL={log_level}")
+
+from .engine import KnowledgeEngine, create_engine
+from .core.config import RAGConfig
 
 __all__ = [
     "__version__", 

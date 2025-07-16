@@ -138,6 +138,7 @@ Thumbs.db
 # Project specific
 data/cache/
 data/chroma_db/
+data/kb/
 data/source_docs/*
 !data/source_docs/.gitkeep
 data/golden_set/*

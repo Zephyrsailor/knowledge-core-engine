@@ -9,9 +9,9 @@ from knowledge_core_engine.core.parsing.base import BaseParser, ParseResult
 from knowledge_core_engine.core.parsing.llama_parser import LlamaParseWrapper
 from knowledge_core_engine.core.parsing.parsers import TextParser, MarkdownParser
 from knowledge_core_engine.utils.config import get_settings
-from knowledge_core_engine.utils.logger import setup_logger
+from knowledge_core_engine.utils.logger import get_logger, log_detailed, log_step
 
-logger = setup_logger(__name__)
+logger = get_logger(__name__)
 
 
 class DocumentProcessor:
@@ -95,6 +95,7 @@ class DocumentProcessor:
         self._parsers[extension] = parser
         logger.info(f"Registered parser for {extension}")
     
+    @log_step("Document Processing")
     async def process(self, file_path: Path) -> ParseResult:
         """
         Process a document file.
@@ -121,18 +122,23 @@ class DocumentProcessor:
                 f"Supported types: {', '.join(sorted(self.supported_extensions))}"
             )
         
+        file_size = file_path.stat().st_size
+        log_detailed(f"Processing file: {file_path.name}", 
+                    data={"type": extension, "size": file_size})
+        
         # Check cache first
         if self.cache_enabled:
             cached_result = await self._get_from_cache(file_path)
             if cached_result:
-                logger.info(f"Cache hit for {file_path.name}")
+                logger.debug(f"Using cached parse result for {file_path.name}")
                 return cached_result
         
         # Get appropriate parser
         parser = self._parsers[extension]
         
         # Parse document
-        logger.info(f"Processing {file_path.name} with {parser.__class__.__name__}")
+        logger.info(f"Parsing {file_path.name} with {parser.__class__.__name__}")
+        
         result = await parser.parse(file_path)
         
         # Add file path to metadata

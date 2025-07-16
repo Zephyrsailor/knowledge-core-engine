@@ -295,9 +295,14 @@ class ChromaDBProvider(VectorStoreProvider):
         query_results = []
         if results["ids"] and results["ids"][0]:
             for i in range(len(results["ids"][0])):
+                # 改进的相似度计算：使用反比例函数而不是简单的1-distance
+                # 这对L2距离更合适，因为L2距离没有固定上界
+                distance = results["distances"][0][i]
+                similarity_score = 1.0 / (1.0 + distance)  # 将距离转换为相似度，范围(0,1]
+                
                 query_results.append(QueryResult(
                     id=results["ids"][0][i],
-                    score=1.0 - results["distances"][0][i],  # Convert distance to similarity
+                    score=similarity_score,
                     text=results["documents"][0][i] if results["documents"] else "",
                     metadata=results["metadatas"][0][i] if results["metadatas"] else {},
                     embedding=results["embeddings"][0][i] if results.get("embeddings") else None

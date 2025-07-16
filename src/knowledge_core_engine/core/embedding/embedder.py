@@ -284,6 +284,11 @@ class DashScopeProvider(EmbeddingProvider):
         # Generate mock embedding
         embedding = [random.random() for _ in range(self.config.embedding_dimensions)]
         
+        # Normalize the embedding to ensure consistent similarity calculations
+        # Note: In production, check if DashScope API returns normalized vectors
+        # If not, normalize them here. Most embedding models return normalized vectors.
+        embedding = self._normalize(embedding)
+        
         return EmbeddingResult(
             text=text,
             embedding=embedding,
@@ -321,6 +326,9 @@ class OpenAIProvider(EmbeddingProvider):
         
         embedding = [random.random() for _ in range(self.config.embedding_dimensions)]
         
+        # OpenAI embeddings are typically normalized, but ensure consistency
+        embedding = self._normalize(embedding)
+        
         return EmbeddingResult(
             text=text,
             embedding=embedding,
@@ -350,6 +358,9 @@ class HuggingFaceProvider(EmbeddingProvider):
         
         # No network delay for local model
         embedding = [random.random() for _ in range(self.config.embedding_dimensions)]
+        
+        # Most sentence transformers return normalized embeddings, but ensure consistency
+        embedding = self._normalize(embedding)
         
         return EmbeddingResult(
             text=text,
