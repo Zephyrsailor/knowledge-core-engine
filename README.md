@@ -9,7 +9,7 @@
 
 🚀 **企业级RAG知识引擎** - 构建准确、可追溯、高性能的知识问答系统
 
-[快速开始](#快速开始) | [核心特性](#核心特性) | [安装指南](#安装指南) | [API文档](#rest-api-服务)
+[快速开始](#快速开始) | [核心特性](#核心特性) | [安装指南](#安装指南) | [评测优化](#评测与优化) | [API文档](#rest-api-服务)
 
 </div>
 
@@ -142,7 +142,7 @@ async def main():
     engine = KnowledgeEngine()
     
     # 添加文档
-    await engine.add("docs/")
+    await engine.add("data/source_docs/")
     
     # 提问
     answer = await engine.ask("什么是RAG技术？")
@@ -387,6 +387,92 @@ eventSource.onmessage = (event) => {
 };
 ```
 
+## 评测与优化
+
+K-Engine 提供了完善的评测框架，帮助您评估和优化RAG系统的性能。
+
+### 快速开始评测
+
+```bash
+# 运行评测（默认测试10个样本）
+python scripts/run_evaluation.py
+
+# 指定测试样本数
+python scripts/run_evaluation.py --samples 5
+
+# 查看帮助
+python scripts/run_evaluation.py --help
+```
+
+### 评测流程说明
+
+1. **准备知识库**：从测试数据集中提取内容，创建评测用知识库
+2. **生成答案**：对每个测试问题运行完整的RAG流程
+3. **计算指标**：评估答案质量和系统性能
+4. **生成报告**：输出详细的评测结果
+
+### 评测指标
+
+- **成功率**：成功生成答案的比例
+- **关键词覆盖率**：答案中包含标准答案关键词的比例（目标 > 60%）
+- **平均答案长度**：生成答案的平均字符数
+- **评测耗时**：完成评测所需时间
+
+### 黄金测试集
+
+项目包含两个精心设计的测试集：
+- `data/golden_set/rag_qa_dataset.json` - RAG技术相关的10个测试用例
+- `data/golden_set/rag_test_set.json` - 更多样化的测试场景
+- 每个用例包含：问题、标准答案、理想检索内容、元数据
+
+### 评测结果示例
+
+```json
+{
+  "summary": {
+    "total_cases": 2,
+    "successful_cases": 2,
+    "success_rate": 1.0,
+    "avg_keyword_coverage": 0.82,  // 82%的关键词覆盖率
+    "avg_answer_length": 646.0
+  },
+  "metadata": {
+    "config_profile": "default",
+    "duration": 37.5  // 总耗时（秒）
+  }
+}
+```
+
+### 优化建议
+
+1. **如果关键词覆盖率低**（<60%）
+   - 增加 `retrieval_top_k` 获取更多上下文
+   - 启用混合检索策略 `retrieval_strategy="hybrid"`
+   - 调整 BM25 权重以提高关键词匹配
+
+2. **如果生成速度慢**
+   - 使用更快的模型（如 qwen-turbo）
+   - 减少 `max_tokens` 限制
+   - 关闭重排序或查询扩展功能
+
+3. **如果答案质量不佳**
+   - 启用元数据增强 `enable_metadata_enhancement=True`
+   - 使用更大的分块大小 `chunk_size=1024`
+   - 启用层级分块保留文档结构
+
+### 评测结果存储
+
+- **位置**：`evaluation_results/` 目录
+- **格式**：`evaluation_default_YYYYMMDD_HHMMSS.json`
+- **内容**：包含完整的测试结果和性能指标
+
+### 持续改进建议
+
+1. **定期评测**：每次重大更新后运行评测
+2. **基准对比**：保存基准结果用于对比改进
+3. **逐步优化**：先用少量样本测试，确认后再全量评测
+4. **关注趋势**：跟踪关键指标的变化趋势
+
 ## 系统架构
 
 ```
@@ -487,6 +573,8 @@ pytest --cov=knowledge_core_engine --cov-report=html
 
 - [配置指南](docs/CONFIGURATION_GUIDE.md) - 详细的配置系统说明
 - [高级功能](docs/ADVANCED_FEATURES.md) - 深入了解高级特性
+- [专业评测指南](docs/EVALUATION_GUIDE.md) - 完整的RAG系统评测方案
+- [检索架构](docs/RETRIEVAL_ARCHITECTURE.md) - 深入理解检索系统设计
 
 
 ---

@@ -33,7 +33,7 @@ class RAGConfig:
     """
     
     # Provider selection
-    llm_provider: str = "deepseek"
+    llm_provider: str = "qwen"
     embedding_provider: str = "dashscope"  
     vectordb_provider: str = "chromadb"
     

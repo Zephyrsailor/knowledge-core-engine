@@ -59,9 +59,7 @@ class RagasAdapter:
                 answer_similarity,
                 answer_correctness
             )
-            from ragas.llms import LangchainLLMWrapper
-            from ragas.embeddings import LangchainEmbeddingsWrapper
-            import pandas as pd
+            from datasets import Dataset
             
             # Map metric names to RAGAS metrics
             metric_map = {
@@ -76,7 +74,7 @@ class RagasAdapter:
             # Select requested metrics
             ragas_metrics = [metric_map[m] for m in metrics if m in metric_map]
             
-            # Prepare data for RAGAS
+            # Prepare data for RAGAS using Dataset format
             data = {
                 "question": [tc.question for tc in test_cases],
                 "answer": [tc.generated_answer or "" for tc in test_cases],
@@ -84,7 +82,8 @@ class RagasAdapter:
                 "ground_truth": [tc.ground_truth for tc in test_cases]
             }
             
-            dataset = pd.DataFrame(data)
+            # Use Dataset instead of DataFrame
+            dataset = Dataset.from_dict(data)
             
             # Configure LLM for RAGAS (using DeepSeek)
             # Note: This requires proper LLM setup which we'll mock for now

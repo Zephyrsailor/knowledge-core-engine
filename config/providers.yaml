@@ -3,7 +3,7 @@
 
 # LLM Providers
 llm:
-  default: deepseek  # Default LLM to use
+  default: qwen  # Default LLM to use
   providers:
     deepseek:
       provider: deepseek
@@ -15,7 +15,7 @@ llm:
     qwen:
       provider: qwen
       api_key: ${DASHSCOPE_API_KEY}
-      model: qwen2.5-72b-instruct
+      model: qwen-plus
       temperature: 0.1
       max_tokens: 2048
     
