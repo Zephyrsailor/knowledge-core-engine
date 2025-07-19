@@ -40,11 +40,12 @@ class LlamaParseWrapper(BaseParser):
             language: Document language
         """
         settings = get_settings()
-        self.api_key = api_key or settings.llama_cloud_api_key or os.getenv("LLAMA_CLOUD_API_KEY")
+        # Use settings (which uses KCE_ prefix) or direct KCE_ env var
+        self.api_key = api_key or settings.llama_cloud_api_key or os.getenv("KCE_LLAMA_CLOUD_API_KEY")
         
         if not self.api_key:
             raise ValueError(
-                "LLAMA_CLOUD_API_KEY not found. Please set it in .env or environment variables."
+                "LLAMA_CLOUD_API_KEY not found. Please set KCE_LLAMA_CLOUD_API_KEY in .env or environment variables."
             )
         
         self.result_type = result_type

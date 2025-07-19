@@ -114,18 +114,18 @@ class RAGConfig:
     
     def __post_init__(self):
         """Auto-configure defaults based on providers."""
-        # Load API keys from environment
+        # Load API keys from environment (only KCE_ prefix)
         if not self.llm_api_key:
-            self.llm_api_key = os.getenv(f"{self.llm_provider.upper()}_API_KEY")
+            self.llm_api_key = os.getenv(f"KCE_{self.llm_provider.upper()}_API_KEY")
         
         if not self.embedding_api_key:
             if self.embedding_provider == "dashscope":
-                self.embedding_api_key = os.getenv("DASHSCOPE_API_KEY")
+                self.embedding_api_key = os.getenv("KCE_DASHSCOPE_API_KEY")
             else:
-                self.embedding_api_key = os.getenv(f"{self.embedding_provider.upper()}_API_KEY")
+                self.embedding_api_key = os.getenv(f"KCE_{self.embedding_provider.upper()}_API_KEY")
         
         if not self.vectordb_api_key and self.vectordb_provider != "chromadb":
-            self.vectordb_api_key = os.getenv(f"{self.vectordb_provider.upper()}_API_KEY")
+            self.vectordb_api_key = os.getenv(f"KCE_{self.vectordb_provider.upper()}_API_KEY")
         
         # Set default models
         if not self.llm_model:
@@ -151,7 +151,7 @@ class RAGConfig:
         # Load reranker API key if needed
         if self.reranker_provider == "api" and self.reranker_api_provider:
             if not self.reranker_api_key:
-                self.reranker_api_key = os.getenv(f"{self.reranker_api_provider.upper()}_API_KEY")
+                self.reranker_api_key = os.getenv(f"KCE_{self.reranker_api_provider.upper()}_API_KEY")
         
         # Set default retrieval strategy based on BM25 provider
         if self.bm25_provider == "none" and self.retrieval_strategy == "hybrid":
@@ -160,9 +160,9 @@ class RAGConfig:
         # Load Elasticsearch credentials if needed
         if self.bm25_provider == "elasticsearch":
             if not self.elasticsearch_username:
-                self.elasticsearch_username = os.getenv("ELASTICSEARCH_USERNAME")
+                self.elasticsearch_username = os.getenv("KCE_ELASTICSEARCH_USERNAME")
             if not self.elasticsearch_password:
-                self.elasticsearch_password = os.getenv("ELASTICSEARCH_PASSWORD")
+                self.elasticsearch_password = os.getenv("KCE_ELASTICSEARCH_PASSWORD")
     
     def _get_default_llm_model(self) -> str:
         """Get default model for LLM provider."""
