@@ -64,14 +64,16 @@ class APIReranker(BaseReranker):
         if api_key:
             self.api_key = api_key
         else:
-            # Try to get from environment
+            # Try to get from environment with KCE_ prefix
             env_var_map = {
-                "dashscope": "DASHSCOPE_API_KEY",
-                "cohere": "COHERE_API_KEY",
-                "jina": "JINA_API_KEY"
+                "dashscope": "KCE_DASHSCOPE_API_KEY",
+                "cohere": "KCE_COHERE_API_KEY",
+                "jina": "KCE_JINA_API_KEY"
             }
             env_var = env_var_map.get(provider)
-            self.api_key = os.getenv(env_var) if env_var else None
+            # Try KCE_ prefix first, then fallback to original
+            if env_var:
+                self.api_key = os.getenv(env_var) or os.getenv(env_var.replace("KCE_", ""))
             
         self._session = None
     
