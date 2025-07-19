@@ -142,7 +142,7 @@ KCE_LLAMA_CLOUD_API_KEY=your_llama_parse_key  # 可选，提供1000次/天免费
 pip install knowledge-core-engine
 
 # 或从源码安装
-pip install git+https://github.com/yourusername/knowledge-core-engine.git
+pip install git+https://github.com/zephyrsailor/knowledge-core-engine.git
 ```
 
 **注意事项**：
