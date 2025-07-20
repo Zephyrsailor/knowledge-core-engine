@@ -28,6 +28,8 @@ class Settings(BaseSettings):
         case_sensitive=False,
         # Use KCE_ prefix to avoid conflicts
         env_prefix="KCE_",
+        # Allow extra fields to avoid validation errors
+        extra="allow",
     )
     
     # API Keys - All optional to avoid forcing users to set them
