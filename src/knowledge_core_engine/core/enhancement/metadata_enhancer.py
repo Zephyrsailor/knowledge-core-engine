@@ -233,13 +233,19 @@ class MetadataEnhancer:
         successful = len(chunks) - failed_count
         logger.info(f"Enhanced {successful}/{len(chunks)} chunks successfully")
         
+        # Calculate cache hits
+        cache_hits = 0
+        if self._cache is not None:
+            for c in result:
+                if "enhancement_failed" not in c.metadata:
+                    cache_key = self._get_cache_key(c)
+                    if cache_key in self._cache:
+                        cache_hits += 1
+        
         log_detailed(f"Batch enhancement completed", 
                     data={"successful": successful, 
                           "failed": failed_count,
-                          "cache_hits": sum(1 for c in result 
-                                          if "enhancement_failed" not in c.metadata 
-                                          and cache_key in self._cache 
-                                          if (cache_key := self._get_cache_key(c)))})
+                          "cache_hits": cache_hits})
         
         return result
     

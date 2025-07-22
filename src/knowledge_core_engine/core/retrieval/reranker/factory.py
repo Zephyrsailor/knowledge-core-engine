@@ -5,7 +5,6 @@ from typing import Optional, Dict, Any
 
 from ...config import RAGConfig
 from .base import BaseReranker
-from .huggingface_reranker import HuggingFaceReranker
 from .api_reranker import APIReranker
 
 logger = logging.getLogger(__name__)
@@ -36,8 +35,22 @@ def create_reranker(config: RAGConfig) -> Optional[BaseReranker]:
         raise ValueError(f"Unknown reranker provider: {provider}")
 
 
-def _create_huggingface_reranker(config: RAGConfig) -> HuggingFaceReranker:
-    """Create HuggingFace reranker."""
+def _create_huggingface_reranker(config: RAGConfig) -> "HuggingFaceReranker":
+    """Create HuggingFace reranker.
+    
+    This function lazily imports HuggingFaceReranker to avoid torch dependency
+    when not using HuggingFace reranker.
+    """
+    try:
+        from .huggingface_reranker import HuggingFaceReranker
+    except ImportError as e:
+        if "torch" in str(e).lower():
+            raise ImportError(
+                "PyTorch is required for HuggingFace reranker. "
+                "Please install it with: pip install 'knowledge-core-engine[reranker-hf]'"
+            )
+        raise
+    
     model_name = config.reranker_model or "bge-reranker-v2-m3"
     use_fp16 = getattr(config, "use_fp16", True)
     device = getattr(config, "reranker_device", None)

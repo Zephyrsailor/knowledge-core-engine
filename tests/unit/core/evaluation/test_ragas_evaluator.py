@@ -133,8 +133,8 @@ class TestRagasEvaluator:
         assert 'metrics' in report
         assert 'faithfulness' in report['metrics']
         assert 'answer_relevancy' in report['metrics']
-        assert report['metrics']['faithfulness']['mean'] == 0.85
-        assert report['metrics']['answer_relevancy']['mean'] == 0.90
+        assert pytest.approx(report['metrics']['faithfulness']['mean'], 0.01) == 0.85
+        assert pytest.approx(report['metrics']['answer_relevancy']['mean'], 0.01) == 0.90
     
     @pytest.mark.asyncio
     async def test_create_ragas_evaluator(self, ragas_config):

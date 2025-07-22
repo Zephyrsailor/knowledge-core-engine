@@ -224,7 +224,7 @@ def multi_vector_indexing(chunk: TextNode) -> None:
 
 **关键工具**：
 - ChromaDB客户端
-- 重排序模型：`bge-reranker-v2-m3-qwen`
+- 重排序模型：`gte-rerank`
 
 **核心逻辑**：
 ```python

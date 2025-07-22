@@ -1,7 +1,7 @@
 """Test the new provider architecture for BM25 and Reranker."""
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from knowledge_core_engine.core.config import RAGConfig
 
 # BM25 imports
@@ -75,14 +75,25 @@ class TestRerankerFactory:
             reranker_model="bge-reranker-v2-m3"
         )
         
-        with patch('knowledge_core_engine.core.retrieval.reranker.factory.HuggingFaceReranker') as mock_hf:
+        # Create a mock class
+        mock_hf_class = MagicMock()
+        mock_hf_instance = MagicMock()
+        mock_hf_class.return_value = mock_hf_instance
+        
+        # Create a mock module
+        import sys
+        mock_module = MagicMock()
+        mock_module.HuggingFaceReranker = mock_hf_class
+        
+        with patch.dict('sys.modules', {'knowledge_core_engine.core.retrieval.reranker.huggingface_reranker': mock_module}):
             reranker = create_reranker(config)
             
-            mock_hf.assert_called_once_with(
+            mock_hf_class.assert_called_once_with(
                 model_name="bge-reranker-v2-m3",
                 use_fp16=True,
                 device=None
             )
+            assert reranker == mock_hf_instance
     
     def test_create_api_reranker_dashscope(self):
         """Test creating API reranker for DashScope."""
@@ -112,19 +123,25 @@ class TestBM25SRetriever:
         retriever = BM25SRetriever(language="en")
         
         # Mock bm25s module
-        with patch.object(retriever, '_bm25s') as mock_bm25s:
-            # Set up mocks
-            mock_bm25s.tokenize.return_value = [["test", "document"]]
-            mock_bm25s.BM25.return_value.retrieve.return_value = ([0], [0.5])
-            
+        mock_bm25s = MagicMock()
+        mock_bm25s.tokenize.return_value = [["test", "document"]]
+        
+        # Mock BM25 class
+        mock_bm25_instance = MagicMock()
+        mock_bm25_instance.retrieve.return_value = ([0], [0.5])
+        mock_bm25s.BM25.return_value = mock_bm25_instance
+        
+        # Mock the import
+        import sys
+        with patch.dict('sys.modules', {'bm25s': mock_bm25s}):
             await retriever.initialize()
             
-            # Add documents
-            await retriever.add_documents(
-                ["test document"],
-                ["doc1"],
-                [{"source": "test"}]
-            )
+            # Set up corpus data
+            retriever._documents = ["test document"]
+            retriever._doc_ids = ["doc1"]
+            retriever._metadata = [{"source": "test"}]
+            retriever._corpus_tokens = [["test", "document"]]
+            retriever._retriever = mock_bm25_instance
             
             # Search
             results = await retriever.search("test", top_k=1)
@@ -134,7 +151,6 @@ class TestBM25SRetriever:
             assert results[0].score == 0.5
 
 
-@pytest.mark.asyncio
 class TestConfigValidation:
     """Test configuration validation."""
     
@@ -201,7 +217,7 @@ class TestIntegration:
     @pytest.mark.asyncio
     async def test_reranker_with_new_system(self):
         """Test that reranker works with new system."""
-        from knowledge_core_engine.core.retrieval.reranker import Reranker
+        from knowledge_core_engine.core.retrieval.reranker_wrapper import Reranker
         
         config = RAGConfig(
             enable_reranking=True,
@@ -212,7 +228,7 @@ class TestIntegration:
         reranker = Reranker(config)
         
         # Mock the factory
-        with patch('knowledge_core_engine.core.retrieval.reranker.create_reranker') as mock_factory:
+        with patch('knowledge_core_engine.core.retrieval.reranker_wrapper.create_reranker') as mock_factory:
             mock_reranker = AsyncMock(spec=BaseReranker)
             mock_factory.return_value = mock_reranker
             

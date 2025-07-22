@@ -15,12 +15,12 @@ class TestRAGConfig:
         config = RAGConfig()
         
         # Provider defaults
-        assert config.llm_provider == "deepseek"
+        assert config.llm_provider == "qwen"
         assert config.embedding_provider == "dashscope"
         assert config.vectordb_provider == "chromadb"
         
         # Model defaults
-        assert config.llm_model == "deepseek-chat"
+        assert config.llm_model == "qwen2.5-72b-instruct"
         assert config.embedding_model == "text-embedding-v3"
         assert config.embedding_dimensions == 1536
         
@@ -52,19 +52,34 @@ class TestRAGConfig:
     
     def test_api_key_from_env(self):
         """Test loading API keys from environment."""
-        with patch.dict(os.environ, {
-            "DEEPSEEK_API_KEY": "test-deepseek-key",
-            "DASHSCOPE_API_KEY": "test-dashscope-key",
+        # Clear existing KCE_ keys and set test keys
+        env_vars = {
+            "DASHSCOPE_API_KEY": "test-dashscope-key", 
             "PINECONE_API_KEY": "test-pinecone-key"
-        }):
-            config = RAGConfig()
-            
-            assert config.llm_api_key == "test-deepseek-key"
-            assert config.embedding_api_key == "test-dashscope-key"
-            
-            # Pinecone key only loaded if using pinecone
-            config2 = RAGConfig(vectordb_provider="pinecone")
-            assert config2.vectordb_api_key == "test-pinecone-key"
+        }
+        # Remove KCE_ keys if they exist
+        keys_to_remove = ["KCE_DASHSCOPE_API_KEY", "KCE_PINECONE_API_KEY"]
+        
+        with patch.dict(os.environ, env_vars, clear=False):
+            # Temporarily remove KCE_ keys
+            removed_values = {}
+            for key in keys_to_remove:
+                if key in os.environ:
+                    removed_values[key] = os.environ.pop(key)
+            try:
+                config = RAGConfig()
+                
+                # Qwen uses DashScope API key
+                assert config.llm_api_key == "test-dashscope-key"
+                assert config.embedding_api_key == "test-dashscope-key"
+                
+                # Pinecone key only loaded if using pinecone
+                config2 = RAGConfig(vectordb_provider="pinecone")
+                assert config2.vectordb_api_key == "test-pinecone-key"
+            finally:
+                # Restore removed keys
+                for key, value in removed_values.items():
+                    os.environ[key] = value
     
     def test_explicit_api_keys(self):
         """Test explicitly provided API keys."""
@@ -78,11 +93,25 @@ class TestRAGConfig:
     
     def test_validation_missing_api_key(self):
         """Test validation fails with missing API key."""
-        config = RAGConfig(llm_provider="openai")
-        # Don't set API key
-        
-        with pytest.raises(ValueError, match="API key required for openai"):
-            config.validate()
+        # Clear any OpenAI keys from environment
+        with patch.dict(os.environ, {}, clear=False):
+            # Remove OpenAI keys if they exist
+            removed_keys = {}
+            keys_to_remove = ["KCE_OPENAI_API_KEY", "OPENAI_API_KEY"]
+            for key in keys_to_remove:
+                if key in os.environ:
+                    removed_keys[key] = os.environ.pop(key)
+            
+            try:
+                config = RAGConfig(llm_provider="openai")
+                # Don't set API key
+                
+                with pytest.raises(ValueError, match="API key required for openai"):
+                    config.validate()
+            finally:
+                # Restore keys
+                for key, value in removed_keys.items():
+                    os.environ[key] = value
     
     def test_validation_invalid_provider(self):
         """Test validation with invalid provider names."""

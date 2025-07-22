@@ -157,7 +157,7 @@ class TestRetriever:
         
         with patch.object(retriever, '_embedder') as mock_embedder, \
              patch.object(retriever, '_vector_store') as mock_store, \
-             patch.object(retriever, '_bm25_search', new_callable=AsyncMock) as mock_bm25:
+             patch.object(retriever, '_bm25_retrieve', new_callable=AsyncMock) as mock_bm25:
             
             # Mock embedding
             mock_embedder.embed_text = AsyncMock(return_value=EmbeddingResult(
@@ -169,7 +169,17 @@ class TestRetriever:
             
             # Mock searches
             mock_store.query = AsyncMock(return_value=mock_vector_results)
-            mock_bm25.return_value = mock_bm25_results
+            # Convert BM25 results to RetrievalResult objects
+            bm25_retrieval_results = [
+                RetrievalResult(
+                    chunk_id=r["id"],
+                    content=r["text"],
+                    score=r["score"],
+                    metadata=r["metadata"]
+                )
+                for r in mock_bm25_results
+            ]
+            mock_bm25.return_value = bm25_retrieval_results
             
             retriever._initialized = True
             

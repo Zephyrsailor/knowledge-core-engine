@@ -168,6 +168,27 @@ class VectorStore:
         await self.initialize()
         await self._provider.clear_collection()
     
+    async def list_documents(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        page: int = 1,
+        page_size: int = 20,
+        return_stats: bool = True
+    ) -> Dict[str, Any]:
+        """列出存储中的文档。
+        
+        Args:
+            filter: 过滤条件
+            page: 页码
+            page_size: 每页大小
+            return_stats: 是否返回统计信息
+            
+        Returns:
+            文档列表和分页信息
+        """
+        await self.initialize()
+        return await self._provider.list_documents(filter, page, page_size, return_stats)
+    
     async def get_collection_info(self) -> Dict[str, Any]:
         """Get information about the collection.
         
@@ -225,6 +246,16 @@ class VectorStoreProvider:
     
     async def get_collection_info(self) -> Dict[str, Any]:
         """Get collection information."""
+        raise NotImplementedError
+    
+    async def list_documents(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        page: int = 1,
+        page_size: int = 20,
+        return_stats: bool = True
+    ) -> Dict[str, Any]:
+        """List documents in the collection."""
         raise NotImplementedError
 
 
@@ -370,6 +401,90 @@ class ChromaDBProvider(VectorStoreProvider):
             "name": self._collection.name,
             "count": self._collection.count(),
             "metadata": self._collection.metadata
+        }
+    
+    async def list_documents(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        page: int = 1,
+        page_size: int = 20,
+        return_stats: bool = True
+    ) -> Dict[str, Any]:
+        """List documents in ChromaDB collection with pagination."""
+        if not self._collection:
+            raise ValueError("Collection not initialized")
+        
+        # 获取所有文档（ChromaDB不直接支持分页，需要手动实现）
+        all_results = self._collection.get(where=filter)
+        
+        if not all_results["ids"]:
+            return {
+                "documents": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "pages": 0
+            }
+        
+        # 按文档名分组（从doc_id中提取）
+        doc_groups = {}
+        for i, doc_id in enumerate(all_results["ids"]):
+            # 从ID中提取文档名（格式：filename_chunkindex_startchar）
+            parts = doc_id.rsplit("_", 2)
+            if len(parts) >= 3:
+                doc_name = parts[0]
+            else:
+                doc_name = doc_id  # 如果格式不符，使用完整ID
+            
+            if doc_name not in doc_groups:
+                doc_groups[doc_name] = {
+                    "name": doc_name,
+                    "chunks": [],
+                    "metadata": all_results["metadatas"][i] if all_results["metadatas"] else {}
+                }
+            
+            # 收集chunk信息
+            doc_groups[doc_name]["chunks"].append({
+                "id": doc_id,
+                "size": len(all_results["documents"][i]) if all_results["documents"] else 0
+            })
+        
+        # 构建文档列表
+        documents = []
+        for doc_name, doc_info in doc_groups.items():
+            doc_entry = {
+                "name": doc_info["metadata"].get("source", doc_name),
+                "path": doc_info["metadata"].get("file_path", ""),
+                "metadata": doc_info["metadata"]
+            }
+            
+            if return_stats:
+                doc_entry["chunks_count"] = len(doc_info["chunks"])
+                doc_entry["total_size"] = sum(chunk["size"] for chunk in doc_info["chunks"])
+            
+            # 添加创建时间（如果有）
+            if "created_at" in doc_info["metadata"]:
+                doc_entry["created_at"] = doc_info["metadata"]["created_at"]
+            
+            documents.append(doc_entry)
+        
+        # 按名称排序
+        documents.sort(key=lambda x: x["name"])
+        
+        # 实现分页
+        total_docs = len(documents)
+        total_pages = (total_docs + page_size - 1) // page_size
+        
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_docs = documents[start_idx:end_idx]
+        
+        return {
+            "documents": paginated_docs,
+            "total": total_docs,
+            "page": page,
+            "page_size": page_size,
+            "pages": total_pages
         }
 
 

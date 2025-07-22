@@ -25,7 +25,8 @@ class OpenAIProvider(LLMProvider):
             config: RAG configuration
         """
         super().__init__(config)
-        self.api_key = config.llm_api_key or os.getenv("OPENAI_API_KEY")
+        # Use KCE_ prefix for environment variables
+        self.api_key = config.llm_api_key or os.getenv("KCE_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
         
         if not self.api_key:
             raise ValueError("OpenAI API key is required")

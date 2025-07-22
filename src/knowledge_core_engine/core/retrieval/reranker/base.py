@@ -81,6 +81,13 @@ class BaseReranker(ABC):
         """
         pass
     
+    async def close(self) -> None:
+        """Close any resources used by the reranker.
+        
+        Subclasses should override this method if they need to clean up resources.
+        """
+        pass
+    
     async def batch_rerank(
         self,
         queries: List[str],

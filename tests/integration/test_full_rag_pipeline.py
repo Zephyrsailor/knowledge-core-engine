@@ -15,7 +15,7 @@ from knowledge_core_engine.core.enhancement.metadata_enhancer import MetadataEnh
 from knowledge_core_engine.core.embedding.embedder import TextEmbedder
 from knowledge_core_engine.core.embedding.vector_store import VectorStore
 from knowledge_core_engine.core.retrieval.retriever import Retriever
-from knowledge_core_engine.core.retrieval.reranker import Reranker
+from knowledge_core_engine.core.retrieval.reranker_wrapper import Reranker
 from knowledge_core_engine.core.generation.generator import Generator
 
 

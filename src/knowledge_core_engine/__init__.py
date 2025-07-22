@@ -29,7 +29,7 @@ try:
     if env_path.exists():
         load_dotenv(env_path)
         # 可选：打印加载成功的提示（仅在DEBUG模式）
-        if os.getenv("DEBUG", "").lower() == "true":
+        if os.getenv("KCE_DEBUG", os.getenv("DEBUG", "")).lower() == "true":
             print(f"✅ Loaded environment variables from {env_path}")
 except ImportError:
     # 如果没有安装 python-dotenv，忽略
@@ -42,7 +42,7 @@ __author__ = "Knowledge Core Team"
 from .utils.logger import setup_logger
 
 # 从环境变量读取日志级别（默认为INFO）
-log_level = os.getenv("LOG_LEVEL", "INFO")
+log_level = os.getenv("KCE_LOG_LEVEL", os.getenv("LOG_LEVEL", "INFO"))
 
 # 初始化全局日志系统
 logger = setup_logger("knowledge_core_engine", log_level=log_level)

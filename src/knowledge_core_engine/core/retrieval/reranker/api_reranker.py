@@ -15,7 +15,7 @@ class APIReranker(BaseReranker):
     SUPPORTED_PROVIDERS = {
         "dashscope": {
             "endpoint": "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
-            "model": "gte-rerank-v2",
+            "model": "gte-rerank",  # 使用正确的模型名称
             "max_documents": 500,
             "max_tokens_per_doc": 4000,
             "max_total_tokens": 30000
@@ -64,14 +64,16 @@ class APIReranker(BaseReranker):
         if api_key:
             self.api_key = api_key
         else:
-            # Try to get from environment
+            # Try to get from environment with KCE_ prefix
             env_var_map = {
-                "dashscope": "DASHSCOPE_API_KEY",
-                "cohere": "COHERE_API_KEY",
-                "jina": "JINA_API_KEY"
+                "dashscope": "KCE_DASHSCOPE_API_KEY",
+                "cohere": "KCE_COHERE_API_KEY",
+                "jina": "KCE_JINA_API_KEY"
             }
             env_var = env_var_map.get(provider)
-            self.api_key = os.getenv(env_var) if env_var else None
+            # Try KCE_ prefix first, then fallback to original
+            if env_var:
+                self.api_key = os.getenv(env_var) or os.getenv(env_var.replace("KCE_", ""))
             
         self._session = None
     
@@ -91,6 +93,12 @@ class APIReranker(BaseReranker):
         )
         
         logger.info(f"Initialized {self.provider} API reranker with model {self.model}")
+    
+    async def close(self) -> None:
+        """Close the aiohttp session."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
     
     async def rerank(
         self,
@@ -135,6 +143,7 @@ class APIReranker(BaseReranker):
         
         try:
             # Use DashScope SDK
+            logger.debug(f"Calling DashScope rerank with {len(documents)} documents")
             response = dashscope.TextReRank.call(
                 model=self.model,
                 query=query,
@@ -143,17 +152,46 @@ class APIReranker(BaseReranker):
                 return_documents=True,
                 api_key=self.api_key
             )
+            logger.debug(f"DashScope response status: {response.status_code}")
             
             if response.status_code != HTTPStatus.OK:
                 raise RuntimeError(f"DashScope API error: {response}")
             
             # Parse results
             results = []
-            for item in response.output.results:
+            logger.debug(f"Response output type: {type(response.output)}")
+            logger.debug(f"Response results type: {type(response.output.results)}")
+            
+            for i, item in enumerate(response.output.results):
+                logger.debug(f"Item {i} type: {type(item)}")
+                logger.debug(f"Item {i} attributes: {dir(item)}")
+                
+                # Try to get document text in various ways
+                doc_text = ""
+                try:
+                    # Method 1: item.document.text
+                    if hasattr(item, 'document') and item.document:
+                        if hasattr(item.document, 'text'):
+                            doc_text = item.document.text
+                        elif isinstance(item.document, dict) and 'text' in item.document:
+                            doc_text = item.document['text']
+                        else:
+                            doc_text = str(item.document)
+                    # Method 2: item.text
+                    elif hasattr(item, 'text'):
+                        doc_text = item.text
+                    # Method 3: Use original document by index
+                    else:
+                        logger.debug(f"Using original document for index {item.index}")
+                        doc_text = documents[item.index] if item.index < len(documents) else ""
+                except Exception as e:
+                    logger.debug(f"Fallback to original document for item {i}: {e}")
+                    doc_text = documents[item.index] if hasattr(item, 'index') and item.index < len(documents) else ""
+                
                 results.append(RerankResult(
-                    document=item.document.text,
-                    score=item.relevance_score,
-                    index=item.index,
+                    document=doc_text,
+                    score=float(item.relevance_score) if hasattr(item, 'relevance_score') else 0.0,
+                    index=int(item.index) if hasattr(item, 'index') else i,
                     metadata={
                         "model": self.model,
                         "provider": self.provider
@@ -163,7 +201,9 @@ class APIReranker(BaseReranker):
             return results
             
         except Exception as e:
-            logger.error(f"DashScope rerank error: {e}")
+            logger.error(f"DashScope rerank SDK error: {e}")
+            logger.debug(f"Error type: {type(e).__name__}")
+            logger.debug(f"Error details: {str(e)}")
             # Fallback to HTTP request if SDK fails
             return await self._rerank_dashscope_http(query, documents, top_k)
     
@@ -174,6 +214,13 @@ class APIReranker(BaseReranker):
         top_k: Optional[int] = None
     ) -> List[RerankResult]:
         """Rerank using DashScope HTTP API."""
+        # 确保 session 已初始化
+        if not self._session:
+            import aiohttp
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout)
+            )
+        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"

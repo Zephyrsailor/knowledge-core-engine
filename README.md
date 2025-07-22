@@ -115,20 +115,51 @@ cp .env.example .env
 在`.env`文件中配置以下变量：
 
 ```bash
+# 重要：所有环境变量使用 KCE_ 前缀，避免与其他项目冲突
+
 # LLM配置（选择其一）
-DEEPSEEK_API_KEY=your_deepseek_api_key
-DASHSCOPE_API_KEY=your_dashscope_api_key  # 用于通义千问
-OPENAI_API_KEY=your_openai_api_key  # 可选
+KCE_DEEPSEEK_API_KEY=your_deepseek_api_key
+KCE_DASHSCOPE_API_KEY=your_dashscope_api_key  # 用于通义千问
+KCE_OPENAI_API_KEY=your_openai_api_key  # 可选
 
 # 文档解析
-LLAMA_CLOUD_API_KEY=your_llama_parse_key  # 可选，提供1000次/天免费额度
+KCE_LLAMA_CLOUD_API_KEY=your_llama_parse_key  # 可选，提供1000次/天免费额度
 
 # 向量数据库（ChromaDB默认无需配置）
-# PINECONE_API_KEY=your_pinecone_key  # 如使用Pinecone
-# WEAVIATE_URL=http://localhost:8080  # 如使用Weaviate
+# KCE_PINECONE_API_KEY=your_pinecone_key  # 如使用Pinecone
+# KCE_WEAVIATE_URL=http://localhost:8080  # 如使用Weaviate
 
 # 日志配置（可选）
-# LOG_LEVEL=DEBUG  # 可选值: DEBUG, INFO, WARNING, ERROR
+# KCE_LOG_LEVEL=INFO  # 可选值: DEBUG, INFO, WARNING, ERROR
+```
+
+### 作为依赖库使用
+
+如果你的项目需要将 KnowledgeCore Engine 作为依赖库使用：
+
+```bash
+# 从 PyPI 安装
+pip install knowledge-core-engine
+
+# 或从源码安装
+pip install git+https://github.com/zephyrsailor/knowledge-core-engine.git
+```
+
+**注意事项**：
+1. 所有环境变量都使用 `KCE_` 前缀，避免与你的项目冲突
+2. API keys 可以通过环境变量设置，也可以在代码中直接传入：
+
+```python
+from knowledge_core_engine import KnowledgeEngine
+
+# 方式1：使用环境变量（需要设置 KCE_ 前缀的环境变量）
+engine = KnowledgeEngine()
+
+# 方式2：直接传入 API keys（推荐）
+engine = KnowledgeEngine(
+    llm_api_key="your_deepseek_key",
+    embedding_api_key="your_dashscope_key"
+)
 ```
 
 ## 使用示例

@@ -25,7 +25,8 @@ class QwenProvider(LLMProvider):
             config: RAG configuration
         """
         super().__init__(config)
-        self.api_key = config.llm_api_key or os.getenv("DASHSCOPE_API_KEY")
+        # Use KCE_ prefix for environment variables
+        self.api_key = config.llm_api_key or os.getenv("KCE_DASHSCOPE_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
         
         if not self.api_key:
             raise ValueError("DashScope API key is required for Qwen")

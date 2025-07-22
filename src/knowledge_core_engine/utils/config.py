@@ -26,11 +26,15 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Use KCE_ prefix to avoid conflicts
+        env_prefix="KCE_",
+        # Allow extra fields to avoid validation errors
+        extra="allow",
     )
     
-    # API Keys
-    llama_cloud_api_key: str
-    dashscope_api_key: str
+    # API Keys - All optional to avoid forcing users to set them
+    llama_cloud_api_key: Optional[str] = None
+    dashscope_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     
     # Model Configuration

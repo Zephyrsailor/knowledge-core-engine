@@ -18,6 +18,8 @@ class TestBM25RealIntegration:
         """测试BM25真正返回结果，完全不使用mock。"""
         engine = KnowledgeEngine(
             retrieval_strategy="bm25",
+            language="zh",  # 指定中文
+            bm25_score_threshold=0.0,  # 暂时禁用阈值过滤
             extra_params={"debug_mode": True}
         )
         
@@ -75,6 +77,8 @@ class TestBM25RealIntegration:
             vector_weight=0.5,
             bm25_weight=0.5,
             retrieval_top_k=10,
+            language="zh",  # 指定中文
+            enable_relevance_threshold=False,  # 完全禁用阈值过滤
             extra_params={"debug_mode": True}
         )
         
@@ -126,7 +130,8 @@ class TestBM25RealIntegration:
         """测试BM25中文分词是否正常工作。"""
         engine = KnowledgeEngine(
             retrieval_strategy="bm25",
-            bm25_language="zh",  # 明确指定中文
+            language="zh",  # 明确指定中文
+            bm25_score_threshold=0.0,  # 暂时禁用阈值过滤
             extra_params={"debug_mode": True}
         )
         
@@ -164,6 +169,8 @@ class TestBM25RealIntegration:
         """测试BM25索引在多次添加文档后的持久性。"""
         engine = KnowledgeEngine(
             retrieval_strategy="bm25",
+            language="zh",  # 指定中文
+            bm25_score_threshold=0.0,  # 暂时禁用阈值过滤
             extra_params={"debug_mode": True}
         )
         

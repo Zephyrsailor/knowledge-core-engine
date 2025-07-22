@@ -2,13 +2,12 @@
 
 from .base import BaseReranker, RerankResult
 from .factory import create_reranker
-from .huggingface_reranker import HuggingFaceReranker
 from .api_reranker import APIReranker
 
+# HuggingFaceReranker is imported lazily in factory to avoid torch dependency
 __all__ = [
     "BaseReranker",
     "RerankResult",
     "create_reranker",
-    "HuggingFaceReranker",
     "APIReranker",
 ]

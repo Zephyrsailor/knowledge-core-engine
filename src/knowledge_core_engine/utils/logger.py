@@ -48,6 +48,10 @@ def setup_logger(
     level = log_level or settings.log_level
     file_path = log_file or settings.log_file
     
+    # Ensure log level is uppercase
+    if isinstance(level, str):
+        level = level.upper()
+    
     # Define format based on log level
     if level == "DEBUG":
         # Detailed format for DEBUG mode
