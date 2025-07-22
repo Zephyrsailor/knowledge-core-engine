@@ -258,27 +258,44 @@ class TestEvaluationMetrics:
     async def test_faithfulness_metric(self):
         """Test faithfulness metric calculation."""
         from knowledge_core_engine.core.evaluation.metrics import FaithfulnessMetric
+        from unittest.mock import AsyncMock, patch
         
-        metric = FaithfulnessMetric()
+        # Mock the LLM client
+        mock_llm = AsyncMock()
+        # First call: extract claims from answer
+        mock_llm.generate = AsyncMock(side_effect=[
+            {"content": '{"claims": ["RAG技术结合了检索和生成", "可以提高准确性"]}'},
+            # Second call: verify first claim
+            {"content": '{"supported": true, "reason": "上下文提到RAG是检索增强生成技术"}'},
+            # Third call: verify second claim  
+            {"content": '{"supported": true, "reason": "上下文提到RAG可以提高生成准确性"}'}
+        ])
         
-        answer = "RAG技术结合了检索和生成，可以提高准确性。"
-        contexts = [
-            "RAG是检索增强生成技术，它先检索相关信息再生成答案。",
-            "RAG的优势包括提高生成准确性和可追溯性。"
-        ]
-        
-        result = await metric.calculate(answer=answer, contexts=contexts)
-        
-        assert result.name == "faithfulness"
-        assert 0 <= result.score <= 1
-        assert "claims" in result.details
+        with patch('knowledge_core_engine.core.evaluation.metrics.create_llm_provider', AsyncMock(return_value=mock_llm)):
+            metric = FaithfulnessMetric()
+            
+            answer = "RAG技术结合了检索和生成，可以提高准确性。"
+            contexts = [
+                "RAG是检索增强生成技术，它先检索相关信息再生成答案。",
+                "RAG的优势包括提高生成准确性和可追溯性。"
+            ]
+            
+            result = await metric.calculate(answer=answer, contexts=contexts)
+            
+            assert result.name == "faithfulness"
+            assert result.score == 1.0  # Both claims supported
+            assert "claims" in result.details
+            assert result.details["total_claims"] == 2
+            assert result.details["supported_claims"] == 2
     
     @pytest.mark.asyncio
     async def test_answer_relevancy_metric(self):
         """Test answer relevancy metric."""
         from knowledge_core_engine.core.evaluation.metrics import AnswerRelevancyMetric
+        from unittest.mock import AsyncMock, patch
         
-        metric = AnswerRelevancyMetric()
+        # Use mock provider to avoid real embeddings
+        metric = AnswerRelevancyMetric(llm_provider="mock")
         
         question = "什么是RAG技术？"
         answer = "RAG是检索增强生成技术，用于改善AI生成质量。"
@@ -287,6 +304,9 @@ class TestEvaluationMetrics:
         
         assert result.name == "answer_relevancy"
         assert 0 <= result.score <= 1
+        # With mock provider, score is fixed at 0.5
+        assert result.score == 0.5
+        assert result.details["method"] == "mock"
     
     @pytest.mark.asyncio
     async def test_context_precision_metric(self):

@@ -92,6 +92,18 @@ class BaseBM25Retriever(ABC):
         pass
     
     @abstractmethod
+    async def delete_documents(self, doc_ids: List[str]) -> int:
+        """Delete documents by IDs.
+        
+        Args:
+            doc_ids: List of document IDs to delete
+            
+        Returns:
+            Number of documents deleted
+        """
+        pass
+    
+    @abstractmethod
     async def clear(self) -> None:
         """Clear all documents from the index."""
         pass

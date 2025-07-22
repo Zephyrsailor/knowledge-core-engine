@@ -11,7 +11,7 @@ from typing import List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -241,6 +241,74 @@ async def query_knowledge_base(request: QueryRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
+
+
+@app.get("/documents", response_model=dict)
+async def list_documents(
+    page: int = Query(default=1, ge=1, description="Page number"),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
+    file_type: Optional[str] = Query(default=None, description="Filter by file type (pdf, md, etc.)"),
+    name_pattern: Optional[str] = Query(default=None, description="Filter by name pattern"),
+    return_stats: bool = Query(default=True, description="Include statistics")
+):
+    """List documents in the knowledge base with pagination and filtering."""
+    if not vector_store:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+    
+    try:
+        # Build filter
+        filter_dict = {}
+        if file_type:
+            filter_dict["file_type"] = file_type
+        if name_pattern:
+            filter_dict["name_pattern"] = name_pattern
+        
+        # Get documents from vector store
+        result = await vector_store.list_documents(
+            filter=filter_dict if filter_dict else None,
+            page=page,
+            page_size=page_size,
+            return_stats=return_stats
+        )
+        
+        return result
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"List documents failed: {str(e)}")
+
+
+@app.delete("/documents/{document_name}")
+async def delete_document(document_name: str):
+    """Delete a document from the knowledge base by name."""
+    if not vector_store:
+        raise HTTPException(status_code=503, detail="Vector store not initialized")
+    
+    try:
+        # Get all document IDs with matching source
+        all_docs = await vector_store.list_documents(filter={"source": document_name})
+        
+        if not all_docs["documents"]:
+            raise HTTPException(status_code=404, detail=f"Document '{document_name}' not found")
+        
+        # Extract all chunk IDs for this document
+        doc_ids = []
+        # This is a simplified version - in production, you'd need to query all chunks
+        # For now, we'll use the delete by source pattern
+        
+        # Delete from vector store
+        # Note: This requires implementing a delete_by_source method or similar
+        # For now, return a message indicating the limitation
+        
+        return {
+            "message": f"Document deletion requires enhanced implementation",
+            "document": document_name,
+            "note": "Use the KnowledgeEngine.delete() method for full deletion support"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Delete document failed: {str(e)}")
 
 
 if __name__ == "__main__":

@@ -21,7 +21,8 @@ class BM25SRetriever(BaseBM25Retriever):
         k1: float = 1.5,
         b: float = 0.75,
         epsilon: float = 0.25,
-        language: str = "en"
+        language: str = "en",
+        persist_directory: str = "./data/bm25_index"
     ):
         """Initialize BM25S retriever.
         
@@ -30,12 +31,14 @@ class BM25SRetriever(BaseBM25Retriever):
             b: Length normalization parameter
             epsilon: Floor value for IDF
             language: Language for tokenization (en, zh, multi)
+            persist_directory: Directory to save/load BM25 index
         """
         super().__init__()
         self.k1 = k1
         self.b = b
         self.epsilon = epsilon
         self.language = language
+        self.persist_directory = persist_directory
         self._retriever = None
         self._corpus_tokens = None
     
@@ -45,6 +48,10 @@ class BM25SRetriever(BaseBM25Retriever):
             import bm25s
             self._bm25s = bm25s
             logger.info("BM25S initialized successfully")
+            
+            # Try to load existing index
+            await self._try_load_index()
+            
         except ImportError:
             raise RuntimeError(
                 "BM25S not installed. Please install with: pip install bm25s"
@@ -71,6 +78,9 @@ class BM25SRetriever(BaseBM25Retriever):
         # Ensure metadata list matches documents
         if metadata is None:
             metadata = [{} for _ in documents]
+        elif isinstance(metadata, list) and len(metadata) == 1 and len(documents) > 1:
+            # Handle case where single metadata is passed for multiple documents
+            metadata = metadata * len(documents)
         
         # Store documents and metadata
         self._documents.extend(documents)
@@ -79,6 +89,11 @@ class BM25SRetriever(BaseBM25Retriever):
         
         # Rebuild index with all documents
         await self._rebuild_index()
+        
+        # Auto-save after adding documents
+        await self._auto_save()
+        
+        logger.info(f"Added {len(documents)} documents to BM25S index, total documents: {len(self._documents)}")
     
     async def _rebuild_index(self) -> None:
         """Rebuild the BM25S index with all documents."""
@@ -159,10 +174,7 @@ class BM25SRetriever(BaseBM25Retriever):
             # Apply metadata filter if provided
             if filter_metadata:
                 doc_meta = self._metadata[idx]
-                if not all(
-                    doc_meta.get(k) == v 
-                    for k, v in filter_metadata.items()
-                ):
+                if not self._matches_filter(doc_meta, filter_metadata):
                     continue
             
             results.append(BM25Result(
@@ -176,6 +188,53 @@ class BM25SRetriever(BaseBM25Retriever):
         results.sort(reverse=True)
         return results[:top_k]
     
+    async def delete_documents(self, doc_ids: List[str]) -> int:
+        """Delete documents by IDs.
+        
+        Args:
+            doc_ids: List of document IDs to delete
+            
+        Returns:
+            Number of documents deleted
+        """
+        if not doc_ids:
+            return 0
+        
+        # Create a set for faster lookup
+        ids_to_delete = set(doc_ids)
+        
+        # Find indices to delete
+        indices_to_delete = []
+        for i, doc_id in enumerate(self._doc_ids):
+            if doc_id in ids_to_delete:
+                indices_to_delete.append(i)
+        
+        if not indices_to_delete:
+            return 0
+        
+        # Sort indices in reverse order for safe deletion
+        indices_to_delete.sort(reverse=True)
+        
+        # Delete from all lists
+        for idx in indices_to_delete:
+            del self._documents[idx]
+            del self._doc_ids[idx]
+            del self._metadata[idx]
+        
+        # Rebuild index
+        if self._documents:
+            await self._rebuild_index()
+        else:
+            self._retriever = None
+            self._corpus_tokens = None
+        
+        # Auto-save after deletion
+        await self._auto_save()
+        
+        deleted_count = len(indices_to_delete)
+        logger.info(f"Deleted {deleted_count} documents from BM25S index")
+        return deleted_count
+    
     async def clear(self) -> None:
         """Clear all documents from the index."""
         self._documents = []
@@ -184,6 +243,63 @@ class BM25SRetriever(BaseBM25Retriever):
         self._retriever = None
         self._corpus_tokens = None
         logger.info("BM25S index cleared")
+    
+    def _matches_filter(self, metadata: Dict[str, Any], filter_spec: Dict[str, Any]) -> bool:
+        """Check if metadata matches the filter specification.
+        
+        Supports simple equality and MongoDB-style operators:
+        - {'key': value} - exact match
+        - {'key': {'$gt': value}} - greater than
+        - {'key': {'$gte': value}} - greater than or equal
+        - {'key': {'$lt': value}} - less than
+        - {'key': {'$lte': value}} - less than or equal
+        - {'key': {'$in': [values]}} - value in list
+        - {'key': {'$nin': [values]}} - value not in list
+        """
+        for key, expected in filter_spec.items():
+            if key not in metadata:
+                return False
+            
+            actual = metadata[key]
+            
+            # Simple equality check
+            if not isinstance(expected, dict):
+                if actual != expected:
+                    return False
+                continue
+            
+            # Complex operators
+            for operator, op_value in expected.items():
+                if operator == '$gt':
+                    if not (actual > op_value):
+                        return False
+                elif operator == '$gte':
+                    if not (actual >= op_value):
+                        return False
+                elif operator == '$lt':
+                    if not (actual < op_value):
+                        return False
+                elif operator == '$lte':
+                    if not (actual <= op_value):
+                        return False
+                elif operator == '$in':
+                    # Handle both single values and lists
+                    if isinstance(actual, list):
+                        # Check if any element in actual list is in op_value
+                        if not any(item in op_value for item in actual):
+                            return False
+                    else:
+                        if actual not in op_value:
+                            return False
+                elif operator == '$nin':
+                    if actual in op_value:
+                        return False
+                else:
+                    # Unknown operator, treat as equality
+                    if actual != expected:
+                        return False
+        
+        return True
     
     async def save(self, path: str) -> None:
         """Save the BM25S index to disk."""
@@ -246,3 +362,32 @@ class BM25SRetriever(BaseBM25Retriever):
         self.language = config["language"]
         
         logger.info(f"BM25S index loaded from {path}")
+    
+    async def _try_load_index(self) -> None:
+        """Try to load existing index from disk."""
+        # Skip loading if no persist directory is configured
+        if not self.persist_directory:
+            logger.info("Persistence disabled, starting with empty index")
+            return
+            
+        try:
+            import os
+            if os.path.exists(self.persist_directory):
+                await self.load(self.persist_directory)
+                logger.info(f"Loaded existing BM25 index with {len(self._documents)} documents")
+        except Exception as e:
+            logger.info(f"No existing BM25 index found or failed to load: {e}")
+            # Continue with empty index
+    
+    async def _auto_save(self) -> None:
+        """Auto-save the index after changes."""
+        # Skip saving if no persist directory is configured
+        if not self.persist_directory:
+            return
+            
+        try:
+            if self._retriever and len(self._documents) > 0:
+                await self.save(self.persist_directory)
+                logger.debug(f"BM25 index auto-saved to {self.persist_directory}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-save BM25 index: {e}")

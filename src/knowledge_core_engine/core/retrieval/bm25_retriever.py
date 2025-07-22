@@ -13,31 +13,72 @@ logger = logging.getLogger(__name__)
 class BM25Retriever:
     """BM25 retriever wrapper that uses the new provider system."""
     
-    def __init__(self, config: RAGConfig):
-        """Initialize BM25 retriever with configuration.
+    def __init__(self, config: Optional[RAGConfig] = None, k1: float = 1.5, b: float = 0.75, epsilon: float = 0.25):
+        """Initialize BM25 retriever with configuration or parameters.
         
         Args:
-            config: RAG configuration object
+            config: RAG configuration object (if None, will create default config)
+            k1: BM25 k1 parameter (for backward compatibility)
+            b: BM25 b parameter (for backward compatibility) 
+            epsilon: BM25 epsilon parameter (for backward compatibility)
         """
-        self.config = config
+        # Handle backward compatibility
+        if config is None:
+            # Create a minimal config for direct parameter usage
+            from ..config import RAGConfig
+            self.config = RAGConfig(
+                embedding_provider="mock",
+                embedding_model="mock",
+                bm25_provider="bm25s",
+                retrieval_strategy="vector"
+            )
+            # Store parameters for later use
+            self._k1 = k1
+            self._b = b
+            self._epsilon = epsilon
+        else:
+            self.config = config
+            self._k1 = k1
+            self._b = b
+            self._epsilon = epsilon
+            
         self._retriever: Optional[BaseBM25Retriever] = None
         self._initialized = False
         
         # Document tracking for compatibility
         self.documents: Dict[str, str] = {}
         self.doc_metadata: Dict[str, Dict[str, Any]] = {}
+        self.doc_ids: List[str] = []
+        self.idf: Dict[str, float] = {}
+        self.avgdl: float = 0.0
+        
+        # BM25 parameters for compatibility
+        self.k1 = k1
+        self.b = b
+        self.epsilon = epsilon
     
     async def initialize(self):
         """Initialize the BM25 provider."""
         if self._initialized:
             return
         
-        # Create BM25 retriever using factory
-        self._retriever = create_bm25_retriever(self.config)
+        # For backward compatibility, create BM25S retriever directly if no config provider
+        if self.config.bm25_provider == "bm25s" or not hasattr(self.config, 'bm25_provider'):
+            from .bm25.bm25s_retriever import BM25SRetriever
+            self._retriever = BM25SRetriever(
+                k1=self._k1,
+                b=self._b,
+                epsilon=self._epsilon,
+                language="zh",  # Default to Chinese for now
+                persist_directory=None  # Disable persistence for testing
+            )
+        else:
+            # Create BM25 retriever using factory
+            self._retriever = create_bm25_retriever(self.config)
         
         if self._retriever:
             await self._retriever.initialize()
-            logger.info(f"Initialized BM25 retriever: provider={self.config.bm25_provider}")
+            logger.info(f"Initialized BM25 retriever with k1={self.k1}, b={self.b}")
         else:
             logger.info("BM25 retrieval not needed for strategy: %s", self.config.retrieval_strategy)
         
@@ -86,18 +127,28 @@ class BM25Retriever:
             # Store for compatibility
             self.documents[doc_id] = content
             self.doc_metadata[doc_id] = metadata
+            if doc_id not in self.doc_ids:
+                self.doc_ids.append(doc_id)
             
             # Prepare for BM25
             doc_texts.append(content)
             doc_ids.append(doc_id)
             doc_metadata.append(metadata)
         
-        # Add to BM25 index
-        await self._retriever.add_documents(doc_texts, doc_ids, doc_metadata)
+        # Add to BM25 index - 确保传递正确的参数格式
+        if doc_texts:
+            await self._retriever.add_documents(
+                documents=doc_texts,
+                doc_ids=doc_ids,
+                metadata=doc_metadata
+            )
+        
+        # Update statistics for compatibility
+        self._update_stats()
         
         logger.info(f"Added {len(documents)} documents to BM25 index")
     
-    def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Search for relevant documents using BM25.
         
         This method is synchronous for backward compatibility.
@@ -115,11 +166,11 @@ class BM25Retriever:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            return loop.run_until_complete(self._search_async(query, top_k))
+            return loop.run_until_complete(self._search_async(query, top_k, filters))
         finally:
             loop.close()
     
-    async def _search_async(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+    async def _search_async(self, query: str, top_k: int = 10, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Search for relevant documents using BM25 (async version)."""
         await self.initialize()
         
@@ -128,7 +179,7 @@ class BM25Retriever:
             return []
         
         # Perform search
-        results = await self._retriever.search(query, top_k)
+        results = await self._retriever.search(query, top_k, filter_metadata=filters)
         
         # Convert to expected format
         formatted_results = []
@@ -140,6 +191,7 @@ class BM25Retriever:
                 "metadata": result.metadata
             })
         
+        logger.info(f"BM25 search returned {len(formatted_results)} results for query: {query[:50]}...")
         return formatted_results
     
     def clear(self) -> None:
@@ -161,5 +213,100 @@ class BM25Retriever:
         
         self.documents.clear()
         self.doc_metadata.clear()
+        self.doc_ids.clear()
+        self.idf.clear()
+        self.avgdl = 0.0
         
         logger.info("BM25 index cleared")
+    
+    def update_document(self, doc_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Update a document in the index."""
+        import asyncio
+        
+        # Run async method in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._update_document_async(doc_id, content, metadata))
+        finally:
+            loop.close()
+    
+    async def _update_document_async(self, doc_id: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Update a document in the index (async version)."""
+        if doc_id in self.documents:
+            # Remove old document
+            await self._remove_document_async(doc_id)
+        
+        # Add updated document
+        doc = {
+            "id": doc_id,
+            "content": content,
+            "metadata": metadata or {}
+        }
+        await self._add_documents_async([doc])
+    
+    def remove_document(self, doc_id: str) -> None:
+        """Remove a document from the index."""
+        import asyncio
+        
+        # Run async method in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._remove_document_async(doc_id))
+        finally:
+            loop.close()
+    
+    async def _remove_document_async(self, doc_id: str) -> None:
+        """Remove a document from the index (async version)."""
+        if doc_id not in self.documents:
+            return
+        
+        await self.initialize()
+        
+        if self._retriever:
+            await self._retriever.delete_documents([doc_id])
+        
+        # Remove from compatibility structures
+        if doc_id in self.documents:
+            del self.documents[doc_id]
+        if doc_id in self.doc_metadata:
+            del self.doc_metadata[doc_id]
+        if doc_id in self.doc_ids:
+            self.doc_ids.remove(doc_id)
+        
+        self._update_stats()
+        logger.info(f"Removed document {doc_id} from BM25 index")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get index statistics."""
+        return {
+            "num_documents": len(self.documents),
+            "num_terms": len(self.idf),
+            "avg_doc_length": self.avgdl,
+            "k1": self.k1,
+            "b": self.b,
+            "epsilon": self.epsilon
+        }
+    
+    def _update_stats(self) -> None:
+        """Update internal statistics for compatibility."""
+        if not self.documents:
+            self.avgdl = 0.0
+            self.idf.clear()
+            return
+        
+        # Calculate average document length
+        total_length = sum(len(doc.split()) for doc in self.documents.values())
+        self.avgdl = total_length / len(self.documents)
+        
+        # Mock IDF calculation for compatibility
+        # In real BM25, this would be calculated properly
+        import math
+        for doc in self.documents.values():
+            words = doc.split()
+            for word in set(words):
+                if word not in self.idf:
+                    # Simple mock IDF
+                    doc_freq = sum(1 for d in self.documents.values() if word in d)
+                    self.idf[word] = math.log((len(self.documents) + 1) / (doc_freq + 1))

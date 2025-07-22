@@ -66,6 +66,7 @@ class Retriever:
         self._vector_store = None
         self._bm25_index = None
         self._reranker = None
+        self._hierarchical_retriever = None
         self._initialized = False
     
     async def initialize(self):
@@ -158,9 +159,22 @@ class Retriever:
         # Apply reranking if enabled
         if self.config.enable_reranking:
             results = await self._apply_reranking(query, results, top_k)
+            # Apply rerank threshold if configured
+            if self.config.enable_relevance_threshold and hasattr(self.config, 'rerank_score_threshold'):
+                original_count = len(results)
+                results = [r for r in results if r.rerank_score >= self.config.rerank_score_threshold]
+                if len(results) < original_count:
+                    logger.info(
+                        f"Rerank threshold filtering: {original_count} → {len(results)} results "
+                        f"(threshold: {self.config.rerank_score_threshold})"
+                    )
         else:
             # If no reranking, just return top_k
             results = results[:top_k]
+            # Apply relevance threshold filtering for non-reranked results
+            if self.config.enable_relevance_threshold:
+                results = self._apply_relevance_threshold(results, strategy)
+                logger.info(f"Applied relevance threshold filtering: {len(results)} results remaining")
         
         return results
     
@@ -301,6 +315,9 @@ class Retriever:
             result.metadata["fusion_method"] = "weighted"
             # Normalize vector score
             result.metadata["normalized_vector_score"] = self._normalize_score(result.score, "vector")
+            # 如果没有BM25结果，设置BM25分数为0
+            result.metadata["bm25_score"] = 0.0
+            result.metadata["normalized_bm25_score"] = 0.0
         
         # Add/merge BM25 results
         for result in bm25_results:
@@ -327,6 +344,8 @@ class Retriever:
                 # New result from BM25
                 result.metadata["bm25_score"] = result.score
                 result.metadata["normalized_bm25_score"] = normalized_bm25_score
+                result.metadata["vector_score"] = 0.0
+                result.metadata["normalized_vector_score"] = 0.0
                 result.metadata["fusion_method"] = "weighted"
                 # 确保权重和为1
                 total_weight = vector_weight + bm25_weight
@@ -434,18 +453,20 @@ class Retriever:
             # Vector scores are typically 0-1
             return min(max(score, 0.0), 1.0)
         elif source == "bm25":
+            # Special case: if BM25 score is 0 (no match), return 0
+            if score == 0.0:
+                return 0.0
+            
             # BM25 scores can be negative or positive
-            # Use min-max normalization with fixed range
-            # Typical BM25 scores range from -200 to 50
-            min_score = -200.0
-            max_score = 50.0
-            
-            # Clamp to range
-            score = max(min_score, min(max_score, score))
-            
-            # Normalize to 0-1
-            normalized = (score - min_score) / (max_score - min_score)
-            return normalized
+            # For positive scores, use simple scaling
+            if score > 0:
+                # Typical good BM25 scores range from 1 to 20
+                # Scale to 0-1 with saturation at 20
+                return min(score / 20.0, 1.0)
+            else:
+                # Negative scores are rare but possible
+                # Map to very low positive values
+                return max(score / 200.0 + 0.1, 0.0)
         else:
             return score
     
@@ -681,6 +702,14 @@ class Retriever:
         await self._reranker.initialize()
         logger.info("Reranker initialized successfully")
     
+    async def close(self):
+        """Close retriever and release resources."""
+        if self._reranker:
+            await self._reranker.close()
+        if self._bm25_index:
+            # BM25 index doesn't have async close, but we can add if needed
+            pass
+    
     async def _apply_reranking(
         self,
         query: str,
@@ -763,3 +792,72 @@ class Retriever:
             except Exception as e:
                 logger.warning(f"Failed to sync BM25 index with vector store: {e}")
                 # Continue anyway - BM25 will be empty but system will still work
+    
+    def _apply_relevance_threshold(
+        self, 
+        results: List[RetrievalResult], 
+        strategy: RetrievalStrategy
+    ) -> List[RetrievalResult]:
+        """Apply relevance threshold filtering based on strategy.
+        
+        Args:
+            results: Retrieval results to filter
+            strategy: Retrieval strategy used
+            
+        Returns:
+            Filtered results above threshold
+        """
+        if not results:
+            return results
+        
+        # Determine threshold based on strategy
+        if strategy == RetrievalStrategy.VECTOR:
+            threshold = self.config.vector_score_threshold
+            score_key = "vector_score"
+        elif strategy == RetrievalStrategy.BM25:
+            threshold = self.config.bm25_score_threshold
+            score_key = "normalized_bm25_score"
+        elif strategy == RetrievalStrategy.HYBRID:
+            threshold = self.config.hybrid_score_threshold
+            score_key = None  # Use main score for hybrid
+        else:
+            return results
+        
+        # Filter results
+        filtered_results = []
+        for result in results:
+            # Get the relevant score
+            if score_key and score_key in result.metadata:
+                score_to_check = result.metadata[score_key]
+            else:
+                score_to_check = result.final_score  # Use rerank score if available, else main score
+            
+            # Apply threshold
+            if score_to_check >= threshold:
+                filtered_results.append(result)
+            else:
+                logger.debug(
+                    f"Filtered out result with score {score_to_check:.3f} "
+                    f"(below threshold {threshold})"
+                )
+        
+        # 显示被过滤掉的结果详情，帮助调试
+        if len(filtered_results) < len(results):
+            logger.info(
+                f"Relevance threshold filtering ({strategy.value}): "
+                f"{len(results)} -> {len(filtered_results)} results "
+                f"(threshold: {threshold})"
+            )
+            # 显示前3个被过滤掉的结果的分数
+            filtered_out = [r for r in results if r not in filtered_results][:3]
+            for i, result in enumerate(filtered_out):
+                score_to_check = result.metadata.get(score_key, result.final_score) if score_key else result.final_score
+                logger.info(
+                    f"  Filtered #{i+1}: score={score_to_check:.3f}, "
+                    f"source='{result.metadata.get('source', 'unknown')}', "
+                    f"preview='{result.content[:50]}...'"
+                )
+        else:
+            logger.debug(f"No results filtered by threshold ({threshold})")
+        
+        return filtered_results

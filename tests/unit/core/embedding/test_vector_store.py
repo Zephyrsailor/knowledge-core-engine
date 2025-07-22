@@ -170,7 +170,8 @@ class TestVectorStore:
             
             assert len(results) == 2
             assert results[0].id == "doc_1"
-            assert results[0].score == 0.9  # 1 - 0.1
+            # Score计算: 1.0 / (1.0 + distance) = 1.0 / (1.0 + 0.1) = 1.0 / 1.1 ≈ 0.909
+            assert abs(results[0].score - (1.0 / 1.1)) < 0.001  # 使用近似比较避免浮点精度问题
             assert results[0].text == "Document 1"
     
     @pytest.mark.asyncio

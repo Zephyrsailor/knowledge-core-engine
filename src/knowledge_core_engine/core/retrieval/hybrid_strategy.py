@@ -25,7 +25,7 @@ class HybridRetriever:
         self.config = config
         self._vector_store = None
         self._bm25_index = None
-        self._bm25_retriever = BM25Retriever()
+        self._bm25_retriever = BM25Retriever(config)
     
     async def retrieve(
         self,

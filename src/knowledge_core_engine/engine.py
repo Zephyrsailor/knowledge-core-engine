@@ -73,6 +73,10 @@ class KnowledgeEngine:
         if kwargs.get('llm_api_key'):
             config_args['llm_api_key'] = kwargs.get('llm_api_key')
         
+        # 如果设置了 rerank_score_threshold，自动启用 enable_relevance_threshold
+        if kwargs.get('rerank_score_threshold') is not None:
+            kwargs['enable_relevance_threshold'] = True
+        
         self.config = RAGConfig(
             **config_args,
             embedding_provider=embedding_provider,
@@ -98,12 +102,19 @@ class KnowledgeEngine:
             reranker_api_key=kwargs.get('reranker_api_key', None),
             rerank_top_k=kwargs.get('rerank_top_k', 5),
             use_fp16=kwargs.get('use_fp16', True),
+            # 阈值过滤参数
+            enable_relevance_threshold=kwargs.get('enable_relevance_threshold', False),
+            vector_score_threshold=kwargs.get('vector_score_threshold', 0.5),
+            bm25_score_threshold=kwargs.get('bm25_score_threshold', 0.05),
+            hybrid_score_threshold=kwargs.get('hybrid_score_threshold', 0.45),
+            rerank_score_threshold=kwargs.get('rerank_score_threshold', None),
             reranker_device=kwargs.get('reranker_device', None),
             enable_hierarchical_chunking=kwargs.get('enable_hierarchical_chunking', False),
             enable_semantic_chunking=kwargs.get('enable_semantic_chunking', True),
             enable_metadata_enhancement=kwargs.get('enable_metadata_enhancement', False),
             chunk_size=kwargs.get('chunk_size', 512),
             chunk_overlap=kwargs.get('chunk_overlap', 50),
+            language=kwargs.get('language', 'en'),  # 添加语言配置
             extra_params=kwargs.get('extra_params', {})
         )
         
@@ -298,6 +309,12 @@ class KnowledgeEngine:
                     
                     # 嵌入和存储
                     with log_process("Embedding and Indexing"):
+                        # 准备批量数据
+                        vector_docs = []
+                        bm25_documents = []
+                        bm25_doc_ids = []
+                        bm25_metadata = []
+                        
                         for i, chunk in enumerate(chunk_result.chunks):
                             embedding_result = await self._embedder.embed_text(chunk.content)
                             # 生成唯一ID
@@ -317,20 +334,31 @@ class KnowledgeEngine:
                                 embedding=embedding_result.embedding,
                                 metadata=metadata
                             )
-                            await self._vector_store.add_documents([doc])
+                            vector_docs.append(doc)
                             
-                            # 如果配置了BM25，同时添加到BM25索引
+                            # 准备BM25数据
                             if self._retriever and self._retriever._bm25_index:
-                                await self._retriever._bm25_index.add_documents(
-                                    documents=[chunk.content],
-                                    doc_ids=[chunk_id],
-                                    metadata=[metadata]
-                                )
+                                bm25_documents.append(chunk.content)
+                                bm25_doc_ids.append(chunk_id)
+                                bm25_metadata.append(metadata)
                             
                             if i == 0:  # 只在DEBUG模式下记录第一个chunk的详情
                                 log_detailed(f"Sample chunk metadata", 
                                            data={k: v for k, v in metadata.items() 
                                                 if k in ['summary', 'questions', 'chunk_type']})
+                        
+                        # 批量添加到向量存储
+                        await self._vector_store.add_documents(vector_docs)
+                        
+                        # 批量添加到BM25索引
+                        if bm25_documents and self._retriever and self._retriever._bm25_index:
+                            # 直接传递三个参数列表
+                            await self._retriever._bm25_index.add_documents(
+                                documents=bm25_documents,
+                                doc_ids=bm25_doc_ids,
+                                metadata=bm25_metadata
+                            )
+                            log_detailed(f"Added {len(bm25_documents)} chunks to BM25 index")
                         
                         log_detailed(f"Indexed {len(chunk_result.chunks)} chunks to vector store")
                     
@@ -578,16 +606,200 @@ class KnowledgeEngine:
             for ctx in contexts
         ]
     
+    async def delete(
+        self,
+        source: Union[str, Path, List[str]]
+    ) -> Dict[str, Any]:
+        """从知识库删除文档。
+        
+        Args:
+            source: 要删除的文档路径或文档ID列表
+            
+        Returns:
+            删除结果统计
+            
+        Example:
+            # 按文件名删除
+            await engine.delete("doc.pdf")
+            
+            # 按文档ID删除
+            await engine.delete(["file1_0_0", "file1_1_512"])
+        """
+        await self._ensure_initialized()
+        
+        # 统计
+        deleted_vector_count = 0
+        deleted_bm25_count = 0
+        
+        # 判断输入类型
+        if isinstance(source, list):
+            # 直接是文档ID列表
+            doc_ids = source
+        else:
+            # 是文件路径或文件名，需要找到对应的文档ID
+            source_path = Path(source)
+            
+            # 智能处理：如果输入看起来像完整文件名（包含扩展名），使用文件名
+            # 否则使用stem（不含扩展名的部分）
+            if '.' in source_path.name:
+                # 使用完整文件名（包含扩展名）
+                file_identifier = source_path.name
+                # 移除扩展名用于匹配doc_id
+                file_stem = source_path.stem
+            else:
+                # 输入可能已经是stem，直接使用
+                file_stem = str(source_path)
+                file_identifier = file_stem
+            
+            # 获取所有匹配的文档ID（格式：filename_chunkindex_startchar）
+            doc_ids = []
+            
+            # 从向量存储获取所有文档
+            try:
+                # 通过provider获取collection
+                if hasattr(self._vector_store, '_provider') and hasattr(self._vector_store._provider, '_collection'):
+                    all_docs = self._vector_store._provider._collection.get()
+                    for doc_id in all_docs["ids"]:
+                        # 匹配以文件stem开头的文档ID
+                        if doc_id.startswith(f"{file_stem}_"):
+                            doc_ids.append(doc_id)
+                else:
+                    logger.warning("Vector store does not support direct document retrieval")
+            except Exception as e:
+                logger.error(f"Failed to retrieve document IDs: {e}")
+        
+        if not doc_ids:
+            if isinstance(source, list):
+                logger.warning(f"No documents found for deletion with IDs: {source}")
+            else:
+                logger.warning(f"No documents found for deletion: {file_identifier}")
+            return {
+                "deleted_ids": [],
+                "deleted_count": 0,
+                "vector_deleted": 0,
+                "bm25_deleted": 0
+            }
+        
+        # 从向量存储删除
+        try:
+            await self._vector_store.delete_documents(doc_ids)
+            deleted_vector_count = len(doc_ids)
+            logger.info(f"Deleted {deleted_vector_count} documents from vector store")
+        except Exception as e:
+            logger.error(f"Failed to delete from vector store: {e}")
+        
+        # 从BM25索引删除
+        if self._retriever and self._retriever._bm25_index:
+            try:
+                deleted_bm25_count = await self._retriever._bm25_index.delete_documents(doc_ids)
+                logger.info(f"Deleted {deleted_bm25_count} documents from BM25 index")
+            except Exception as e:
+                logger.error(f"Failed to delete from BM25 index: {e}")
+        
+        return {
+            "deleted_ids": doc_ids,
+            "deleted_count": len(doc_ids),  # 总删除数
+            "vector_deleted": deleted_vector_count,
+            "bm25_deleted": deleted_bm25_count
+        }
+    
+    async def update(
+        self,
+        source: Union[str, Path]
+    ) -> Dict[str, Any]:
+        """更新知识库中的文档（删除旧的，添加新的）。
+        
+        Args:
+            source: 要更新的文档路径
+            
+        Returns:
+            更新结果统计
+            
+        Example:
+            # 更新文档
+            await engine.update("doc.pdf")
+            await engine.update("path/to/doc.pdf")
+        """
+        # 转换为Path对象
+        file_path = Path(source)
+        
+        # 先删除旧文档 - 只使用文件名进行删除
+        # 这样无论传入的是相对路径还是绝对路径都能正确匹配
+        delete_result = await self.delete(file_path.name)
+        
+        # 再添加新文档 - 使用完整路径
+        add_result = await self.add([file_path])
+        
+        return {
+            "deleted": delete_result,
+            "added": add_result
+        }
+    
     async def clear(self):
         """清空知识库。"""
         await self._ensure_initialized()
         await self._vector_store.clear()
+        if self._retriever and self._retriever._bm25_index:
+            await self._retriever._bm25_index.clear()
+    
+    async def list(
+        self,
+        filter: Optional[Dict[str, Any]] = None,
+        page: int = 1,
+        page_size: int = 20,
+        return_stats: bool = True
+    ) -> Dict[str, Any]:
+        """列出知识库中的文档。
+        
+        Args:
+            filter: 过滤条件，支持：
+                - file_type: 文件类型，如 "pdf", "md"
+                - name_pattern: 文件名模式匹配
+                - created_after: 创建时间之后
+                - created_before: 创建时间之前
+            page: 页码，从1开始
+            page_size: 每页数量
+            return_stats: 是否返回统计信息（chunks数量、总大小等）
+            
+        Returns:
+            包含文档列表和元信息的字典：
+            {
+                "documents": [
+                    {
+                        "name": "文档名.pdf",
+                        "path": "/path/to/文档名.pdf",
+                        "chunks_count": 10,  # 仅当return_stats=True时
+                        "total_size": 1024,  # 仅当return_stats=True时
+                        "created_at": "2024-01-01T00:00:00",
+                        "metadata": {...}
+                    }
+                ],
+                "total": 100,  # 总文档数
+                "page": 1,
+                "page_size": 20,
+                "pages": 5  # 总页数
+            }
+        """
+        await self._ensure_initialized()
+        
+        # 调用向量存储的list方法
+        return await self._vector_store.list_documents(
+            filter=filter,
+            page=page,
+            page_size=page_size,
+            return_stats=return_stats
+        )
     
     async def close(self):
         """关闭引擎，释放资源。"""
         if self._initialized:
-            # 这里可以添加资源清理逻辑
-            pass
+            # 关闭所有组件
+            if self._retriever:
+                await self._retriever.close()
+            if self._generator:
+                # Generator might need close in future
+                pass
+            self._initialized = False
     
     # 支持上下文管理器
     async def __aenter__(self):

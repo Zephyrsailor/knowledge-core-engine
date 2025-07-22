@@ -59,16 +59,21 @@ def _create_bm25s_retriever(config: RAGConfig) -> BM25SRetriever:
     else:
         language = "multi"  # Multilingual
     
+    # Get persist directory - place BM25 index alongside vector store
+    persist_dir = getattr(config, "persist_directory", "./data/knowledge_base")
+    bm25_persist_dir = f"{persist_dir}/bm25_index"
+    
     logger.info(
-        "Creating BM25S retriever (k1=%.2f, b=%.2f, language=%s)",
-        k1, b, language
+        "Creating BM25S retriever (k1=%.2f, b=%.2f, language=%s, persist_dir=%s)",
+        k1, b, language, bm25_persist_dir
     )
     
     return BM25SRetriever(
         k1=k1,
         b=b,
         epsilon=epsilon,
-        language=language
+        language=language,
+        persist_directory=bm25_persist_dir
     )
 
 
