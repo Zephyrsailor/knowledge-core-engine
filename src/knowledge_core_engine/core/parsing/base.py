@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 @dataclass
@@ -12,6 +12,7 @@ class ParseResult:
     
     markdown: str
     metadata: Dict[str, Any]
+    image: List[str] = None
     
     @property
     def content(self) -> str:

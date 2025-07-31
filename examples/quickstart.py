@@ -11,12 +11,14 @@ async def main():
     engine = KnowledgeEngine()
     
     # 添加文档（可以是文件、目录或列表）
-    await engine.add("data/source_docs/")  # 使用您自己的文档目录
+    # await engine.add("data/source_docs/")  # 使用您自己的文档目录
     
     # 提问
-    answer = await engine.ask("什么是RAG技术？")
+    answer = await engine.ask("是官方网站么？",retrieval_only=True)
     
     # 打印答案
+    # for text in answer:
+    #     print(text)
     print(answer)
 
 

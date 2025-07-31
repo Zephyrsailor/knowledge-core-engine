@@ -11,6 +11,9 @@ from knowledge_core_engine.core.parsing.parsers import TextParser, MarkdownParse
 from knowledge_core_engine.utils.config import get_settings
 from knowledge_core_engine.utils.logger import get_logger, log_detailed, log_step
 
+# 在导入部分添加
+from knowledge_core_engine.core.parsing.parsers.multimodal_pdf_parser import MultimodalPDFParser
+
 logger = get_logger(__name__)
 
 
@@ -57,6 +60,7 @@ class DocumentProcessor:
         # Simple parsers
         self._text_parser = TextParser()
         self._markdown_parser = MarkdownParser()
+        self._multimodal_pdf_parser = MultimodalPDFParser()
         
         # LlamaParse for complex documents
         self._llama_parser = LlamaParseWrapper(**llama_parse_kwargs)
@@ -65,8 +69,8 @@ class DocumentProcessor:
         self._parsers: Dict[str, BaseParser] = {
             '.txt': self._text_parser,
             '.md': self._markdown_parser,
-            # LlamaParse handles these formats
-            '.pdf': self._llama_parser,
+            # 直接使用多模态PDF解析器
+            '.pdf': self._multimodal_pdf_parser,
             '.docx': self._llama_parser,
             '.doc': self._llama_parser,
             '.pptx': self._llama_parser,

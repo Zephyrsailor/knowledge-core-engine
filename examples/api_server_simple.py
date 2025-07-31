@@ -177,7 +177,7 @@ async def upload_document(file: UploadFile = File(...)):
         # Embed and store
         chunks_stored = 0
         for chunk in chunk_result.chunks:
-            embedding_result = await embedder.embed(chunk.content)
+            embedding_result = await embedder.embed_text(chunk.content)
             await vector_store.add_documents([{
                 "id": chunk.chunk_id,
                 "content": chunk.content,

@@ -24,6 +24,9 @@ from .core.retrieval.reranker_wrapper import Reranker
 from .core.generation.generator import Generator
 from .utils.metadata_cleaner import clean_metadata
 from .utils.logger import get_logger, log_process, log_step, log_detailed
+# 在导入部分添加
+from .core.embedding.multimodal_embedder import MultimodalEmbedder
+import base64
 
 logger = get_logger(__name__)
 
@@ -128,6 +131,8 @@ class KnowledgeEngine:
         self._retriever = None
         self._reranker = None
         self._generator = None
+        # 添加多模态嵌入器（延迟初始化）
+        self._multimodal_embedder = None
     
     async def _ensure_initialized(self):
         """确保所有组件已初始化。"""
@@ -179,6 +184,17 @@ class KnowledgeEngine:
             self._reranker = Reranker(self.config)
         
         self._generator = Generator(self.config)
+
+        # 初始化多模态嵌入器（如果有DashScope API密钥）
+        try:
+            dashscope_key = self.config.embedding_api_key if self.config.embedding_provider == "dashscope" else None
+            if dashscope_key:
+                self._multimodal_embedder = MultimodalEmbedder(dashscope_key)
+                await self._multimodal_embedder.initialize()
+                logger.info("Multimodal embedder initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize multimodal embedder: {e}")
+            self._multimodal_embedder = None
         
         # 初始化异步组件
         await self._embedder.initialize()
@@ -259,111 +275,24 @@ class KnowledgeEngine:
                     # 解析文档
                     with log_process("Document Parsing"):
                         parse_result = await self._parser.process(file_path)
-                        # 展示解析结果的实际内容
-                        preview = parse_result.content[:300].replace('\n', ' ')
-                        if len(parse_result.content) > 300:
-                            preview += "..."
-                        log_detailed(f"Parse result", 
-                                   data={
-                                       "method": parse_result.metadata.get('parse_method', 'unknown'),
-                                       "length": len(parse_result.content),
-                                       "preview": preview
-                                   })
-                    
-                    # 分块
-                    with log_process("Document Chunking"):
-                        chunk_result = await self._chunker.process_parse_result(parse_result)
-                        # 展示分块策略和结果
-                        chunk_info = []
-                        for i, chunk in enumerate(chunk_result.chunks[:3]):  # 只显示前3个
-                            chunk_info.append({
-                                "chunk": i,
-                                "size": len(chunk.content),
-                                "start": chunk.content[:50].replace('\n', ' ') + "..."
-                            })
-                        log_detailed(f"Chunking result", 
-                                   data={
-                                       "strategy": "hierarchical" if self.config.enable_hierarchical_chunking else "fixed_size",
-                                       "chunk_size": self.config.chunk_size,
-                                       "overlap": self.config.chunk_overlap,
-                                       "total_chunks": chunk_result.total_chunks,
-                                       "samples": chunk_info
-                                   })
-                    
-                    # 如果启用元数据增强，对每个块进行增强
-                    if self._metadata_enhancer:
-                        with log_process("Metadata Enhancement"):
-                            enhanced_chunks = []
-                            enhanced_count = 0
-                            for chunk in chunk_result.chunks:
-                                try:
-                                    # 增强元数据（方法会就地修改chunk并返回）
-                                    enhanced_chunk = await self._metadata_enhancer.enhance_chunk(chunk)
-                                    enhanced_chunks.append(enhanced_chunk)
-                                    enhanced_count += 1
-                                except Exception as e:
-                                    logger.warning(f"Failed to enhance chunk metadata: {e}")
-                                    enhanced_chunks.append(chunk)
-                            chunk_result.chunks = enhanced_chunks
-                            log_detailed(f"Enhanced {enhanced_count}/{len(chunk_result.chunks)} chunks")
-                    
-                    # 嵌入和存储
-                    with log_process("Embedding and Indexing"):
-                        # 准备批量数据
-                        vector_docs = []
-                        bm25_documents = []
-                        bm25_doc_ids = []
-                        bm25_metadata = []
                         
-                        for i, chunk in enumerate(chunk_result.chunks):
-                            embedding_result = await self._embedder.embed_text(chunk.content)
-                            # 生成唯一ID
-                            chunk_id = f"{file_path.stem}_{i}_{chunk.start_char}"
-                            # 合并并清理元数据
-                            metadata = clean_metadata({
-                                **chunk.metadata,
-                                "source": str(file_path.name),
-                                "file_path": str(file_path),
-                                "chunk_index": i
-                            })
-                            
-                            # 创建VectorDocument对象
-                            doc = VectorDocument(
-                                id=chunk_id,
-                                text=chunk.content,
-                                embedding=embedding_result.embedding,
-                                metadata=metadata
-                            )
-                            vector_docs.append(doc)
-                            
-                            # 准备BM25数据
-                            if self._retriever and self._retriever._bm25_index:
-                                bm25_documents.append(chunk.content)
-                                bm25_doc_ids.append(chunk_id)
-                                bm25_metadata.append(metadata)
-                            
-                            if i == 0:  # 只在DEBUG模式下记录第一个chunk的详情
-                                log_detailed(f"Sample chunk metadata", 
-                                           data={k: v for k, v in metadata.items() 
-                                                if k in ['summary', 'questions', 'chunk_type']})
+                        # 检查是否有多模态数据
+                        has_multimodal_data = (
+                            parse_result.image is not None and 
+                            isinstance(parse_result.image, dict) and
+                            'images' in parse_result.image and
+                            len(parse_result.image['images']) > 0
+                        )
                         
-                        # 批量添加到向量存储
-                        await self._vector_store.add_documents(vector_docs)
-                        
-                        # 批量添加到BM25索引
-                        if bm25_documents and self._retriever and self._retriever._bm25_index:
-                            # 直接传递三个参数列表
-                            await self._retriever._bm25_index.add_documents(
-                                documents=bm25_documents,
-                                doc_ids=bm25_doc_ids,
-                                metadata=bm25_metadata
-                            )
-                            log_detailed(f"Added {len(bm25_documents)} chunks to BM25 index")
-                        
-                        log_detailed(f"Indexed {len(chunk_result.chunks)} chunks to vector store")
-                    
-                    total_chunks += chunk_result.total_chunks
-                
+                        if has_multimodal_data and self._multimodal_embedder:
+                            # 使用多模态处理流程
+                            chunk_count = await self._process_multimodal_content(parse_result, file_path)
+                            total_chunks += chunk_count
+                        else:
+                            # 使用原有的处理流程（只处理文本）
+                            chunk_count = await self._process_standard_content(parse_result, file_path)
+                            total_chunks += chunk_count
+        
             except Exception as e:
                 logger.error(f"Failed to process {file_path}: {e}")
                 failed_files.append({
@@ -419,8 +348,25 @@ class KnowledgeEngine:
                     data={"top_k": top_k, "return_details": return_details})
         
         # 检索
+        # 检索
         with log_process("Retrieval", query=question[:50] + "..." if len(question) > 50 else question):
             contexts = await self._retriever.retrieve(question, top_k=top_k)
+            
+            # 处理多模态数据
+            for ctx in contexts:
+                # 如果是图像类型且包含图像数据，确保有base64格式
+                if (ctx.metadata.get('content_type') == 'image' and 
+                    'image_data' in ctx.metadata):
+                    # 确保图像数据以base64格式可用
+                    if not ctx.metadata.get('image_base64'):
+                        ctx.metadata['image_base64'] = ctx.metadata['image_data']
+                # 如果content包含图像占位符，但metadata中有图像数据，更新content
+                elif (ctx.metadata.get('content_type') == 'image' and 
+                      '[图像' in ctx.content and 
+                      'image_data' in ctx.metadata):
+                    # 为图像内容添加实际的base64数据到content中
+                    ctx.content = f"{ctx.content}\n\nimage_base64:{ctx.metadata['image_data']}"
+                    ctx.metadata['image_base64'] = ctx.metadata['image_data']
             
             # 展示检索结果
             retrieval_results = []
@@ -789,7 +735,159 @@ class KnowledgeEngine:
             page_size=page_size,
             return_stats=return_stats
         )
-    
+
+    async def _process_standard_content(self, parse_result, file_path) -> int:
+        """处理标准文本内容（非多模态）"""
+        # 分块处理
+        with log_process("Text Chunking"):
+            chunking_result = await self._chunker.process_parse_result(parse_result)
+
+        # 元数据增强
+        if self._metadata_enhancer:
+            with log_process("Metadata Enhancement"):
+                chunking_result = await self._metadata_enhancer.enhance_chunks(chunking_result)
+
+        # 生成嵌入向量
+        with log_process("Text Embedding"):
+            # 准备文本内容
+            texts = [chunk.content for chunk in chunking_result.chunks]
+            embeddings = await self._embedder.embed_batch(texts)
+
+        # 创建向量文档
+        vector_docs = []
+        for i, (chunk, embedding) in enumerate(zip(chunking_result.chunks, embeddings)):
+            # 生成文档ID
+            doc_id = f"{file_path.stem}_{i}_{chunk.start_char}"
+
+            # 清理元数据
+            metadata = clean_metadata({
+                **chunking_result.document_metadata,
+                **chunk.metadata,
+                'chunk_index': i,
+                'total_chunks': len(chunking_result.chunks)
+            })
+
+            vector_doc = VectorDocument(
+                id=doc_id,
+                text=chunk.content,
+                embedding=embedding.embedding,
+                metadata=metadata
+            )
+            vector_docs.append(vector_doc)
+
+        # 存储到向量数据库
+        with log_process("Vector Storage"):
+            await self._vector_store.add_documents(vector_docs)
+
+        # 添加到BM25索引
+        if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
+            with log_process("BM25 Indexing"):
+                # 分离文档数据为三个列表
+                documents = [doc.text for doc in vector_docs]
+                doc_ids = [doc.id for doc in vector_docs]
+                metadata_list = [doc.metadata for doc in vector_docs]
+                
+                await self._retriever._bm25_index.add_documents(
+                    documents=documents,
+                    doc_ids=doc_ids,
+                    metadata=metadata_list
+                )
+
+        return len(vector_docs)
+
+    async def _process_multimodal_content(self, parse_result, file_path) -> int:
+        """处理多模态内容（文本+图像）"""
+        # 准备多模态内容
+        multimodal_contents = []
+
+        # 添加文本块
+        if parse_result.image and 'text_chunks' in parse_result.image:
+            for text_chunk in parse_result.image['text_chunks']:
+                multimodal_contents.append({
+                    'type': 'text',
+                    'content': text_chunk['content'],
+                    'metadata': {
+                        'page': text_chunk.get('page', 0),
+                        'chunk_type': 'text'
+                    }
+                })
+
+        # 添加图像
+        if parse_result.image and 'images' in parse_result.image:
+            for img in parse_result.image['images']:
+                multimodal_contents.append({
+                    'type': 'image',
+                    'content': img,
+                    'metadata': {
+                        'page': img.get('page', 0),
+                        'index': img.get('index', 0),
+                        'chunk_type': 'image'
+                    }
+                })
+
+        # 生成多模态嵌入
+        with log_process("Multimodal Embedding"):
+            embeddings = await self._multimodal_embedder.generate_embeddings(multimodal_contents)
+
+        # 创建向量文档
+        vector_docs = []
+        for i, (content, embedding) in enumerate(zip(multimodal_contents, embeddings)):
+            # 生成文档ID
+            doc_id = f"{file_path.stem}_{i}_{content['metadata'].get('page', 0)}"
+
+            # 准备文本内容（用于存储和检索）
+            if content['type'] == 'text':
+                text_content = content['content']
+            else:
+                text_content = f"[图像 - 页面 {content['metadata'].get('page', 0)}]"
+
+            # 清理元数据
+            metadata = clean_metadata({
+                **parse_result.metadata,
+                **content['metadata'],
+                'chunk_index': i,
+                'total_chunks': len(multimodal_contents),
+                'content_type': content['type'],
+                'is_multimodal': True
+            })
+            
+            # 如果是图像类型，保存原始图像数据到metadata
+            if content['type'] == 'image' and 'data' in content['content']:
+                # 将图像字节数据转换为base64字符串存储
+                image_base64 = base64.b64encode(content['content']['data']).decode('utf-8')
+                metadata['image_data'] = image_base64
+                # 同时更新文本内容，包含base64数据
+                text_content = f"[图像 - 页面 {content['metadata'].get('page', 0)}]\n\nimage_base64:{image_base64}"
+
+            vector_doc = VectorDocument(
+                id=doc_id,
+                text=text_content,
+                embedding=embedding.embedding,
+                metadata=metadata
+            )
+            vector_docs.append(vector_doc)
+
+        # 存储到向量数据库
+        with log_process("Vector Storage"):
+            await self._vector_store.add_documents(vector_docs)
+
+        # 添加到BM25索引（只添加文本内容）
+        if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
+            with log_process("BM25 Indexing"):
+                text_docs = [
+                    {
+                        'id': doc.id,
+                        'text': doc.text,
+                        'metadata': doc.metadata
+                    }
+                    for doc in vector_docs
+                    if doc.metadata.get('content_type') == 'text'
+                ]
+                if text_docs:
+                    await self._retriever._bm25_index.add_documents(text_docs)
+
+        return len(vector_docs)
+
     async def close(self):
         """关闭引擎，释放资源。"""
         if self._initialized:

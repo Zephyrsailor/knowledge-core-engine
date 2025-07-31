@@ -1,6 +1,5 @@
-"""Concrete parser implementations."""
+from .text_parser import TextParser
+from .markdown_parser import MarkdownParser
+from .multimodal_pdf_parser import MultimodalPDFParser
 
-from knowledge_core_engine.core.parsing.parsers.text_parser import TextParser
-from knowledge_core_engine.core.parsing.parsers.markdown_parser import MarkdownParser
-
-__all__ = ["TextParser", "MarkdownParser"]
+__all__ = ['TextParser', 'MarkdownParser', 'MultimodalPDFParser']
