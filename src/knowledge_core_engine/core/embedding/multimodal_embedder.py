@@ -60,6 +60,7 @@ class MultimodalEmbedder:
         try:
             resp = dashscope.TextEmbedding.call(
                 model="text-embedding-v3",
+                api_key=dashscope.api_key,
                 input=text
             )
             
@@ -110,6 +111,7 @@ class MultimodalEmbedder:
                 try:
                     resp = dashscope.MultiModalEmbedding.call(
                         model="multimodal-embedding-v1",
+                        api_key=dashscope.api_key,
                         input=fmt
                     )
                     if resp.status_code == 200:
@@ -119,18 +121,37 @@ class MultimodalEmbedder:
                     continue
             
             if resp and resp.status_code == 200 and hasattr(resp, 'output') and resp.output:
-                if 'embedding' in resp.output:
-                    embedding = resp.output['embedding']
-                elif 'embeddings' in resp.output:
+                # 修复：正确提取嵌入向量，与文本嵌入处理保持一致
+                embedding = None
+                if 'embeddings' in resp.output:
                     emb_list = resp.output['embeddings']
                     if isinstance(emb_list, list) and len(emb_list) > 0:
-                        embedding = emb_list[0]
+                        # 提取第一个嵌入的向量部分
+                        if isinstance(emb_list[0], dict) and 'embedding' in emb_list[0]:
+                            embedding = emb_list[0]['embedding']
+                        else:
+                            embedding = emb_list[0]
                     else:
+                        return self._create_zero_embedding()
+                elif 'embedding' in resp.output:
+                    # 如果是字典格式，尝试提取向量部分
+                    emb_data = resp.output['embedding']
+                    if isinstance(emb_data, dict) and 'embedding' in emb_data:
+                        embedding = emb_data['embedding']
+                    elif isinstance(emb_data, list):
+                        embedding = emb_data
+                    else:
+                        logger.warning(f"Unexpected embedding format: {type(emb_data)}")
                         return self._create_zero_embedding()
                 elif 'data' in resp.output:
                     embedding = resp.output['data']
                 else:
                     logger.warning("Unexpected image embedding response format")
+                    return self._create_zero_embedding()
+
+                # 确保 embedding 是列表格式
+                if not isinstance(embedding, list):
+                    logger.warning(f"Embedding is not a list: {type(embedding)}")
                     return self._create_zero_embedding()
                 
                 return EmbeddingResult(
@@ -156,7 +177,7 @@ class MultimodalEmbedder:
         """创建零向量嵌入作为占位符"""
         return EmbeddingResult(
             text="",
-            embedding=[0.0] * 1536,  # 标准嵌入维度
+            embedding=[0.0] * 1024,  # 标准嵌入维度
             model="placeholder",
             usage={},
             metadata={"type": "placeholder"}

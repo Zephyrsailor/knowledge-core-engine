@@ -214,12 +214,12 @@ class RAGConfig:
     def _get_default_dimensions(self) -> int:
         """Get default dimensions for embedding model."""
         defaults = {
-            "dashscope": 1536,
+            "dashscope": 1024,
             "openai": 3072,
             "cohere": 1024,
             "huggingface": 1024
         }
-        return defaults.get(self.embedding_provider, 1536)
+        return defaults.get(self.embedding_provider, 1024)
     
     def validate(self) -> None:
         """Validate configuration."""

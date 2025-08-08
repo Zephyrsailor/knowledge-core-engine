@@ -874,17 +874,34 @@ class KnowledgeEngine:
         # 添加到BM25索引（只添加文本内容）
         if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
             with log_process("BM25 Indexing"):
-                text_docs = [
-                    {
-                        'id': doc.id,
-                        'text': doc.text,
-                        'metadata': doc.metadata
-                    }
-                    for doc in vector_docs
+                # 过滤出文本类型的文档
+                text_vector_docs = [
+                    doc for doc in vector_docs
                     if doc.metadata.get('content_type') == 'text'
                 ]
-                if text_docs:
-                    await self._retriever._bm25_index.add_documents(text_docs)
+                
+                if text_vector_docs:
+                    # 分离为三个列表
+                    documents = [doc.text for doc in text_vector_docs]
+                    doc_ids = [doc.id for doc in text_vector_docs]
+                    metadata_list = [doc.metadata for doc in text_vector_docs]
+                    
+                    await self._retriever._bm25_index.add_documents(
+                        documents=documents,
+                        doc_ids=doc_ids,
+                        metadata=metadata_list
+                    )
+                # text_docs = [
+                #     {
+                #         'id': doc.id,
+                #         'text': doc.text,
+                #         'metadata': doc.metadata
+                #     }
+                #     for doc in vector_docs
+                #     if doc.metadata.get('content_type') == 'text'
+                # ]
+                # if text_docs:
+                #     await self._retriever._bm25_index.add_documents(text_docs)
 
         return len(vector_docs)
 
