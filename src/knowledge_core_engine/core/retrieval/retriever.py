@@ -9,6 +9,7 @@ from datetime import datetime
 
 from ..config import RAGConfig
 from ..embedding.embedder import TextEmbedder
+from ..embedding.multimodal_embedder import MultimodalEmbedder
 from ..embedding.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,9 @@ class Retriever:
             return
         
         # Initialize embedder and vector store
-        self._embedder = TextEmbedder(self.config)
+        dashscope_key = self.config.embedding_api_key if self.config.embedding_provider == "dashscope" else None
+        self._embedder = MultimodalEmbedder(dashscope_key)
+        # self._embedder = TextEmbedder(self.config)
         self._vector_store = VectorStore(self.config)
         
         await self._embedder.initialize()
@@ -186,7 +189,8 @@ class Retriever:
     ) -> List[RetrievalResult]:
         """Retrieve using vector similarity."""
         # Embed query
-        embedding_result = await self._embedder.embed_text(query)
+        # embedding_result = await self._embedder.embed_text(query)
+        embedding_result = await self._embedder._embed_text(query)
         
         # Search vector store
         query_results = await self._vector_store.query(

@@ -58,10 +58,12 @@ class MultimodalEmbedder:
     async def _embed_text(self, text: str) -> EmbeddingResult:
         """生成文本嵌入"""
         try:
-            resp = dashscope.TextEmbedding.call(
-                model="text-embedding-v3",
+            input = [{'text': text}]
+            resp = dashscope.MultiModalEmbedding.call(
+                # model="text-embedding-v3",
+                model="multimodal-embedding-v1",
                 api_key=dashscope.api_key,
-                input=text
+                input=input
             )
             
             if resp.status_code == 200 and hasattr(resp, 'output') and resp.output:
@@ -76,7 +78,8 @@ class MultimodalEmbedder:
                 return EmbeddingResult(
                     text=text,
                     embedding=embedding,
-                    model="text-embedding-v3",
+                    model="multimodal-embedding-v1",
+                    # model="text-embedding-v3",
                     usage=getattr(resp, 'usage', {}),
                     metadata={"type": "text"}
                 )

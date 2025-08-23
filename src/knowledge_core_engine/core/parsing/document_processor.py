@@ -7,7 +7,7 @@ from typing import Dict, Optional, Set
 
 from knowledge_core_engine.core.parsing.base import BaseParser, ParseResult
 from knowledge_core_engine.core.parsing.llama_parser import LlamaParseWrapper
-from knowledge_core_engine.core.parsing.parsers import TextParser, MarkdownParser
+from knowledge_core_engine.core.parsing.parsers import TextParser, MarkdownParser, ImageParser
 from knowledge_core_engine.utils.config import get_settings
 from knowledge_core_engine.utils.logger import get_logger, log_detailed, log_step
 
@@ -61,6 +61,7 @@ class DocumentProcessor:
         self._text_parser = TextParser()
         self._markdown_parser = MarkdownParser()
         self._multimodal_pdf_parser = MultimodalPDFParser()
+        self._image_parser = ImageParser()
         
         # LlamaParse for complex documents
         self._llama_parser = LlamaParseWrapper(**llama_parse_kwargs)
@@ -78,6 +79,8 @@ class DocumentProcessor:
             '.xlsx': self._llama_parser,
             '.xls': self._llama_parser,
             '.csv': self._llama_parser,
+            '.jpg': self._image_parser,
+            '.png': self._image_parser,
         }
     
     @property
