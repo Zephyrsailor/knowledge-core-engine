@@ -236,7 +236,7 @@ class KnowledgeEngine:
             source = Path(source)
             if source.is_dir():
                 files = list(source.glob("**/*"))
-                files = [f for f in files if f.suffix in ['.pdf', '.docx', '.md', '.txt']]
+                files = [f for f in files if f.suffix in ['.pdf', '.docx', '.md', '.txt','.jpg','.png','.jpeg']]
             else:
                 files = [source]
         else:
