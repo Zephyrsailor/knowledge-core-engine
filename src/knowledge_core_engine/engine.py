@@ -801,24 +801,25 @@ class KnowledgeEngine:
         multimodal_contents = []
 
         # 添加文本块
-        if parse_result.image and 'text_chunks' in parse_result.image:
-            for text_chunk in parse_result.image['text_chunks']:
-                multimodal_contents.append({
-                    'type': 'text',
-                    'content': text_chunk['content'],
-                    'metadata': {
-                        'page': text_chunk.get('page', 0),
-                        'chunk_type': 'text'
-                    }
-                })
+        # if parse_result.image and 'text_chunks' in parse_result.image:
+        #     for text_chunk in parse_result.image['text_chunks']:
+        #         multimodal_contents.append({
+        #             'type': 'text',
+        #             'content': text_chunk['content'],
+        #             'metadata': {
+        #                 'page': text_chunk.get('page', 0),
+        #                 'chunk_type': 'text'
+        #             }
+        #         })
 
         # 添加图像
         if parse_result.image and 'images' in parse_result.image:
             for img in parse_result.image['images']:
                 multimodal_contents.append({
                     'type': 'image',
-                    'content': img,
+                    'content': parse_result.image['text_chunks'][0]['content'],
                     'metadata': {
+                        'img_data': img,
                         'page': img.get('page', 0),
                         'index': img.get('index', 0),
                         'chunk_type': 'image'
@@ -827,7 +828,9 @@ class KnowledgeEngine:
 
         # 生成多模态嵌入
         with log_process("Multimodal Embedding"):
-            embeddings = await self._multimodal_embedder.generate_embeddings(multimodal_contents)
+            # embeddings = await self._multimodal_embedder.generate_embeddings(multimodal_contents)
+            str_arr = [content['content'] for content in multimodal_contents]
+            embeddings = await self._embedder.embed_batch(str_arr)
 
         # 创建向量文档
         vector_docs = []
@@ -839,7 +842,7 @@ class KnowledgeEngine:
             if content['type'] == 'text':
                 text_content = content['content']
             else:
-                text_content = f"[图像 - 页面 {content['metadata'].get('page', 0)}]"
+                text_content = content['content']
 
             # 清理元数据
             metadata = clean_metadata({
@@ -848,16 +851,17 @@ class KnowledgeEngine:
                 'chunk_index': i,
                 'total_chunks': len(multimodal_contents),
                 'content_type': content['type'],
+                'image_data': base64.b64encode(content['metadata']['img_data']['data']).decode('utf-8'),
                 'is_multimodal': True
             })
             
             # 如果是图像类型，保存原始图像数据到metadata
-            if content['type'] == 'image' and 'data' in content['content']:
+            if content['type'] == 'image' and 'data' in content['metadata']['img_data']:
                 # 将图像字节数据转换为base64字符串存储
-                image_base64 = base64.b64encode(content['content']['data']).decode('utf-8')
-                metadata['image_data'] = image_base64
+                # image_base64 = base64.b64encode(content['metadata']['img_data']['data']).decode('utf-8')
+                # metadata['image_data'] = image_base64
                 # 同时更新文本内容，包含base64数据
-                text_content = f"[图像 - 页面 {content['metadata'].get('page', 0)}]\n\nimage_base64:{image_base64}"
+                text_content = content['content']
 
             vector_doc = VectorDocument(
                 id=doc_id,
