@@ -23,7 +23,8 @@ class MultimodalPDFParser(BaseParser):
             doc = fitz.open(str(file_path))
             text_chunks = []
             images = []
-            
+            # 用于记录已经处理过的图片xref，避免重复保存复用图片
+            extracted_xrefs = set()
             # 提取内容
             for page_num in range(len(doc)):
                 page = doc.load_page(page_num)
@@ -36,6 +37,16 @@ class MultimodalPDFParser(BaseParser):
                 # 提取图片
                 img_list = page.get_images(full=True)
                 for img_index, img in enumerate(img_list):
+                    xref = img[0]  # 图片的交叉引用编号是元组的第一个元素
+                    print(f"  图片 {img_index + 1} 的XREF为: {xref}")
+
+                    # 如果这张图片之前已经提取过，则跳过保存，只记录信息
+                    if xref in extracted_xrefs:
+                        print(f"  XREF {xref} 的图片已在之前页面提取过，本次跳过保存以避免重复。")
+                        continue
+
+                    # 标记该xref为已提取
+                    extracted_xrefs.add(xref)
                     try:
                         base_img = doc.extract_image(img[0])
                         img_data = base_img["image"]
@@ -72,7 +83,9 @@ class MultimodalPDFParser(BaseParser):
             return ParseResult(
                 markdown=markdown_content,
                 metadata=metadata,
-                image=image_data
+                image=image_data,
+                file_path='',
+                file_type=''
             )
             
         except Exception as e:

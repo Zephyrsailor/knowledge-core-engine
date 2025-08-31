@@ -12,7 +12,14 @@ class ParseResult:
     
     markdown: str
     metadata: Dict[str, Any]
+    file_path: str
+    file_type: str
+    content_list: List[Dict] = None
+    md_content: str = "",
+    output_dir: str = "",
+    execution_time: float = 0.0
     image: List[str] = None
+    success: bool = True
     
     @property
     def content(self) -> str:

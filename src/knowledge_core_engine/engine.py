@@ -10,12 +10,17 @@ KnowledgeCore Engine - 简洁的高级封装
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import os
+import base64
+import json
+
+
 
 from .core.config import RAGConfig
 from .core.parsing.document_processor import DocumentProcessor
 from .core.chunking.pipeline import ChunkingPipeline
 from .core.chunking.enhanced_chunker import EnhancedChunker
 from .core.chunking.smart_chunker import SmartChunker
+from .core.chunking import ChunkAgent, ChunkConfig
 from .core.enhancement.metadata_enhancer import MetadataEnhancer, EnhancementConfig
 from .core.embedding.embedder import TextEmbedder
 from .core.embedding.vector_store import VectorStore, VectorDocument
@@ -26,7 +31,8 @@ from .utils.metadata_cleaner import clean_metadata
 from .utils.logger import get_logger, log_process, log_step, log_detailed
 # 在导入部分添加
 from .core.embedding.multimodal_embedder import MultimodalEmbedder
-import base64
+# 添加ChromaAgent导入
+from .core.embedding.chroma_agent import ChromaAgent
 
 logger = get_logger(__name__)
 
@@ -52,6 +58,7 @@ class KnowledgeEngine:
         embedding_provider: str = "dashscope", 
         persist_directory: str = "./data/knowledge_base",
         log_level: Optional[str] = None,
+        auto_caption: bool = True,  # 添加自动图片描述配置
         **kwargs
     ):
         """初始化知识引擎。
@@ -61,6 +68,7 @@ class KnowledgeEngine:
             embedding_provider: 嵌入模型提供商 (dashscope/openai)
             persist_directory: 知识库存储路径
             log_level: 日志级别 (DEBUG/INFO/WARNING/ERROR)，默认使用环境变量或INFO
+            auto_caption: 是否自动为图片生成描述
             **kwargs: 其他配置参数
         """
         # 设置日志级别
@@ -118,8 +126,18 @@ class KnowledgeEngine:
             chunk_size=kwargs.get('chunk_size', 512),
             chunk_overlap=kwargs.get('chunk_overlap', 50),
             language=kwargs.get('language', 'en'),  # 添加语言配置
-            extra_params=kwargs.get('extra_params', {})
+            extra_params=kwargs.get('extra_params', {}),
+            # 切片配置
+            max_chunk_size=kwargs.get('max_chunk_size',1000),  # 最大切片大小（字符数）
+            min_chunk_size=kwargs.get('min_chunk_size',100),  # 最小切片大小（字符数）
+            overlap_size=kwargs.get('overlap_size',100),  # 重叠大小（字符数）
+            preserve_sentences=kwargs.get('preserve_sentences',True),  # 保持句子完整性
+            preserve_paragraphs=kwargs.get('preserve_paragraphs',True)  # 保持段落完整性
         )
+        
+        # 添加图片描述配置
+        self.auto_caption = auto_caption
+        self.caption_llm = None  # 延迟初始化
         
         # 内部组件（延迟初始化）
         self._initialized = False
@@ -133,6 +151,18 @@ class KnowledgeEngine:
         self._generator = None
         # 添加多模态嵌入器（延迟初始化）
         self._multimodal_embedder = None
+        # 添加ChromaAgent（延迟初始化）
+        self._chroma_agent = None
+        
+        # 初始化ChunkAgent
+        chunk_config = ChunkConfig(
+            max_chunk_size=self.config.chunk_size,
+            min_chunk_size=self.config.chunk_size // 4,
+            overlap_size=self.config.chunk_overlap,
+            preserve_sentences=True,
+            preserve_paragraphs=True
+        )
+        self.chunk_agent = ChunkAgent(chunk_config)
     
     async def _ensure_initialized(self):
         """确保所有组件已初始化。"""
@@ -196,6 +226,29 @@ class KnowledgeEngine:
             logger.warning(f"Failed to initialize multimodal embedder: {e}")
             self._multimodal_embedder = None
         
+        # 初始化图片描述LLM（如果启用自动描述）
+        if self.auto_caption:
+            from langchain_openai import ChatOpenAI
+            from .core.parsing.utils.mineru_utils import Qwen25VL72BInstruct
+            try:
+                model_config = Qwen25VL72BInstruct()
+                self.caption_llm = ChatOpenAI(
+                    openai_api_base=model_config.api_base,
+                    openai_api_key=model_config.api_key,
+                    model_name=model_config.model,
+                    streaming=False,
+                    temperature=0.1,
+                    max_tokens=512,
+                    extra_body={
+                        "vl_high_resolution_images": "True",
+                        "top_k": 1,
+                    }
+                )
+                logger.info("图片描述模型初始化成功")
+            except Exception as e:
+                logger.warning(f"初始化图片描述LLM失败: {e}")
+                self.caption_llm = None
+        
         # 初始化异步组件
         await self._embedder.initialize()
         await self._vector_store.initialize()
@@ -203,6 +256,20 @@ class KnowledgeEngine:
         if self._reranker:
             await self._reranker.initialize()
         await self._generator.initialize()
+        
+        # 初始化ChromaAgent
+        try:
+            # 获取数据库管理器（从vector_store中获取）
+            db_manager = getattr(self._vector_store._provider, '_collection', None)
+            config = {
+                'output_dir': getattr(self.config, 'output_dir', './output'),
+                'cls_dir': getattr(self.config, 'cls_dir', 'cls')
+            }
+            self._chroma_agent = ChromaAgent(db_manager=db_manager, config=config)
+            logger.info("ChromaAgent initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize ChromaAgent: {e}")
+            self._chroma_agent = None
         
         self._initialized = True
     
@@ -311,7 +378,206 @@ class KnowledgeEngine:
                    f"{total_chunks} chunks created")
         
         return result
-    
+
+    @log_step("Add Documents to Knowledge Base V2")
+    async def add_v2(
+            self,
+            source: Union[str, Path, List[Union[str, Path]]]
+    ) -> Dict[str, Any]:
+        """添加文档到知识库。
+
+                Args:
+                    source: 文档路径，可以是单个文件、目录或文件列表
+
+                Returns:
+                    处理结果统计
+
+                Example:
+                    # 添加单个文件
+                    await engine.add_v2("doc.pdf")
+
+                    # 添加整个目录
+                    await engine.add_v2("docs/")
+
+                    # 添加多个文件
+                    await engine.add_v2(["doc1.pdf", "doc2.md"])
+                """
+        await self._ensure_initialized()
+
+        # 统一处理输入
+        if isinstance(source, (str, Path)):
+            source = Path(source)
+            if source.is_dir():
+                files = list(source.glob("**/*"))
+                files = [f for f in files if f.suffix in ['.pdf', '.docx', '.md', '.txt', '.jpg', '.png']]
+            else:
+                files = [source]
+        else:
+            files = [Path(f) for f in source]
+
+        # 处理统计
+        total_files = len(files)
+        total_chunks = 0
+        failed_files = []
+
+        log_detailed(f"Processing {total_files} files",
+                     data={"files": [str(f) for f in files]})
+
+        for file_path in files:
+            try:
+                # 首先检查文档是否已存在于知识库中
+
+                #todo:重复上传检测待完成
+
+                # doc_check_id = f"{file_path.stem}_0_0"  # 使用第一个chunk的ID作为检查标识
+                # existing_doc = await self._vector_store.get_document(doc_check_id)
+                #
+                # if existing_doc:
+                #     logger.info(f"Document {file_path.name} already exists in knowledge base, skipping")
+                #     # 统计现有chunks数量
+                #     chunk_count = 0
+                #     while True:
+                #         check_id = f"{file_path.stem}_{chunk_count}_0"
+                #         if not await self._vector_store.get_document(check_id):
+                #             break
+                #         chunk_count += 1
+                #     total_chunks += chunk_count
+                #     continue
+
+                with log_process(f"Processing {file_path.name}",
+                                 file_type=file_path.suffix,
+                                 file_size=file_path.stat().st_size):
+
+                    # 解析文档
+                    with log_process("Document Parsing"):
+                        parse_result = await self._parser.process(file_path)
+
+                    # 添加图片描述逻辑
+                    if parse_result.success and self.auto_caption:
+                        output_dir = parse_result.output_dir
+                        file_stem = file_path.stem
+                        
+                        # 查找并处理content_list.json
+                        content_list_path = self._find_content_list_path(output_dir, file_stem)
+                        if content_list_path:
+                            content_list = self._load_content_list(content_list_path)
+                            if content_list:
+                                with log_process("Image Captioning"):
+                                    await self._process_content_list_captions(content_list, str(content_list_path.parent))
+                        
+                        # 处理单独的图片文件
+                        elif file_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff']:
+                            try:
+                                with log_process("Image Captioning"):
+                                    caption = await self._generate_image_caption(file_path)
+                                    if caption and hasattr(parse_result, 'data') and parse_result.data:
+                                        parse_result.data['image_caption'] = caption
+                                        logger.info(f"为图片文件 {file_path.name} 生成描述")
+                            except Exception as e:
+                                logger.warning(f"为图片文件生成描述时出错: {e}")
+
+                    # 添加chunk逻辑
+                    if parse_result.success:
+                        # 步骤3: 文档切片
+                        with log_process("Document Chunking"):
+                            # 查找content_list文件
+                            content_list_path = self._find_content_list_path(parse_result.output_dir, file_path.stem)
+                            if content_list_path:
+                                # 使用content_list文件的父目录作为output_dir，这样可以正确找到images目录
+                                actual_output_dir = str(content_list_path.parent)
+                                chunks = self.chunk_agent.chunk_document(
+                                    str(content_list_path),
+                                    actual_output_dir,
+                                    file_path.stem
+                                )
+
+                                # 转换为原有格式
+                                chunk_result = {
+                                    'success': True,
+                                    'data': {
+                                        'chunks': [chunk.to_dict() for chunk in chunks],
+                                        'total_count': len(chunks)
+                                    }
+                                }
+                            else:
+                                logger.error("未找到content_list文件")
+                                chunk_result = {'success': False, 'error': '未找到content_list文件'}
+
+                    if chunk_result.get('success'):
+                        chunks = chunk_result['data']['chunks']
+                        logger.info(f"发现 {len(chunks)} 个切片")
+
+                        # 步骤4: 使用ChromaAgent直接处理chunks
+                        with log_process("Processing Chunks with ChromaAgent"):
+                            if self._chroma_agent:
+                                # 直接调用ChromaAgent的process_chunks_for_service方法
+                                duplicate_check = self._chroma_agent.process_chunks_for_service(
+                                    chunks=chunks,  # 直接传递chunks
+                                    source_file_name=file_path.name,
+                                    is_reparse=False  # 根据实际需求设置
+                                )
+                            else:
+                                # 如果ChromaAgent未初始化，使用原有逻辑作为fallback
+                                chunks_data = self._prepare_chunks_for_storage([chunk.to_dict() for chunk in chunks], file_path.name)
+                                duplicate_check = self._check_duplicates(chunks_data)
+
+                        # 根据处理结果选择处理方式
+                        if duplicate_check['new_items']:
+                            # 进行向量化和存储
+                            chunk_count = await self._process_chunks_with_vectorization(
+                                duplicate_check, file_path
+                            )
+                            total_chunks += chunk_count
+                    else:
+                        # 如果解析失败，使用原有逻辑作为fallback
+                        # 检查是否有多模态数据 - 参考Vision_RAG的逻辑
+                        has_multimodal_data = False
+                        
+                        # 检查解析结果中的图像数据
+                        if parse_result.image is not None:
+                            # 支持多种图像数据格式
+                            if isinstance(parse_result.image, list) and len(parse_result.image) > 0:
+                                # 图像列表格式
+                                has_multimodal_data = True
+                            elif isinstance(parse_result.image, dict):
+                                # 字典格式，检查是否包含图像
+                                if ('images' in parse_result.image and 
+                                    len(parse_result.image['images']) > 0):
+                                    has_multimodal_data = True
+                                # 检查是否有其他多模态内容
+                                elif any(key in parse_result.image for key in 
+                                       ['text_chunks', 'tables', 'equations']):
+                                    has_multimodal_data = True
+                        
+                        # 根据Vision_RAG的处理逻辑选择处理方式
+                        if has_multimodal_data and self._multimodal_embedder:
+                            # 使用多模态处理流程 - 采用Vision_RAG的向量化策略
+                            chunk_count = await self._process_multimodal_content_v2(parse_result, file_path)
+                            total_chunks += chunk_count
+                        else:
+                            # 使用原有的处理流程（只处理文本）
+                            chunk_count = await self._process_standard_content(parse_result, file_path)
+                            total_chunks += chunk_count
+
+            except Exception as e:
+                logger.error(f"Failed to process {file_path}: {e}")
+                failed_files.append({
+                    "file": str(file_path),
+                    "error": str(e)
+                })
+
+        result = {
+            "total_files": total_files,
+            "processed_files": total_files - len(failed_files),
+            "failed_files": failed_files,
+            "total_chunks": total_chunks
+        }
+
+        logger.info(f"Document ingestion completed: {result['processed_files']}/{total_files} files, "
+                    f"{total_chunks} chunks created")
+
+        return result
+
     @log_step("Question Answering")
     async def ask(
         self, 
@@ -904,6 +1170,392 @@ class KnowledgeEngine:
                 #     await self._retriever._bm25_index.add_documents(text_docs)
 
         return len(vector_docs)
+    
+    def _prepare_chunks_for_storage(self, chunks: list, source_file: str) -> list:
+        """准备切片数据用于存储"""
+        prepared_chunks = []
+        
+        for i, chunk in enumerate(chunks):
+            chunk_data = {
+                'content': chunk.get('content', ''),
+                'metadata': {
+                    'source_file': source_file,
+                    'chunk_type': chunk.get('type', 'text'),
+                    'chunk_id': chunk.get('id', f"chunk_{i}"),
+                    'page_idx': chunk.get('page', 0),
+                    'chunk_idx': i,
+                    'parent_document': source_file,
+                    'embedding_type': chunk.get('embedding_type', 'text'),
+                    **chunk.get('metadata', {})
+                }
+            }
+            
+            # 如果有原始内容（如图像base64），保存
+            if 'original_content' in chunk:
+                chunk_data['original_content'] = chunk['original_content']
+                chunk_data['metadata']['has_original_content'] = True
+            
+            prepared_chunks.append(chunk_data)
+        
+        return prepared_chunks
+    
+    def _check_duplicates(self, chunks_data: list) -> dict:
+        """检查重复项"""
+        # 简化版本的重复检测
+        # 实际实现中可以查询向量数据库进行更精确的检测
+        new_items = []
+        existing_items = []
+        
+        for chunk_data in chunks_data:
+            # 生成基于内容的唯一ID
+            content_id = self._generate_content_id(
+                chunk_data['content'], 
+                chunk_data['metadata']
+            )
+            chunk_data['doc_id'] = content_id
+            
+            # 简单的重复检测逻辑
+            # TODO: 实现更精确的重复检测
+            new_items.append(chunk_data)
+        
+        return {
+            'new_items': new_items,
+            'existing_items': existing_items,
+            'total_new': len(new_items),
+            'total_existing': len(existing_items)
+        }
+    
+    async def _process_chunks_with_vectorization(self, duplicate_check: dict, file_path) -> int:
+        """处理切片并进行向量化"""
+        new_chunks = duplicate_check['new_items']
+        vector_docs = []
+        
+        for chunk_data in new_chunks:
+            # 根据类型选择嵌入方式
+            if chunk_data['metadata']['embedding_type'] == 'visual' and self._multimodal_embedder:
+                # 使用多模态嵌入器处理图像
+                embedding_result = await self._multimodal_embedder.generate_embeddings([
+                    {
+                        'type': 'image',
+                        'content': chunk_data.get('original_content', ''),
+                        'metadata': chunk_data['metadata']
+                    }
+                ])
+                embedding = embedding_result[0].embedding if embedding_result else None
+            else:
+                # 使用文本嵌入器处理文本
+                embedding_result = await self._embedder.embed_text(chunk_data['content'])
+                embedding = embedding_result.embedding if embedding_result else None
+            
+            if embedding:
+                # 清理元数据
+                metadata = clean_metadata(chunk_data['metadata'])
+                
+                vector_doc = VectorDocument(
+                    id=chunk_data['doc_id'],
+                    text=chunk_data['content'],
+                    embedding=embedding,
+                    metadata=metadata
+                )
+                vector_docs.append(vector_doc)
+        
+        # 存储到向量数据库
+        if vector_docs:
+            with log_process("Vector Storage"):
+                await self._vector_store.add_documents(vector_docs)
+            
+            # 添加文本内容到BM25索引
+            if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
+                text_docs = [doc for doc in vector_docs if doc.metadata.get('chunk_type') == 'text']
+                if text_docs:
+                    with log_process("BM25 Indexing"):
+                        documents = [doc.text for doc in text_docs]
+                        doc_ids = [doc.id for doc in text_docs]
+                        metadata_list = [doc.metadata for doc in text_docs]
+                        
+                        await self._retriever._bm25_index.add_documents(
+                            documents, doc_ids, metadata_list
+                        )
+        
+        return len(vector_docs)
+
+    def _image_to_data_url(self, image_path: Union[str, Path]) -> str:
+        """将图像路径转换为data URL格式"""
+        try:
+            from PIL import Image
+            import io
+            
+            with Image.open(image_path) as img:
+                # 转换为RGB格式
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # 调整图像大小以避免过大
+                max_size = (1024, 1024)
+                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                
+                # 转换为base64
+                buffer = io.BytesIO()
+                img.save(buffer, format='JPEG', quality=85)
+                img_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                
+                return f"data:image/jpeg;base64,{img_data}"
+        except Exception as e:
+            logger.error(f"转换图像 {image_path} 时出错: {e}")
+            return ""
+    
+    async def _generate_image_caption(self, image_path: Union[str, Path]) -> str:
+        """为图片生成描述"""
+        if not self.caption_llm:
+            return ""
+            
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            
+            data_url = self._image_to_data_url(image_path)
+            if not data_url:
+                return ""
+                
+            system_message = SystemMessage(content="你是一个专业的图像分析助手。请仔细观察图像并提供准确、详细的中文描述。描述应该包括图像的主要内容、对象、场景、颜色、布局等关键信息。请保持描述简洁明了，不超过200字。")
+            
+            human_message = HumanMessage(content=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url}
+                },
+                {
+                    "type": "text",
+                    "text": "请详细描述这张图片的内容。"
+                }
+            ])
+            
+            response = await self.caption_llm.ainvoke([system_message, human_message])
+            caption = response.content.strip()
+            
+            logger.debug(f"为图片 {Path(image_path).name} 生成描述: {caption[:50]}...")
+            return caption
+            
+        except Exception as e:
+            logger.error(f"生成图片描述失败 {image_path}: {e}")
+            return ""
+    
+    def _find_content_list_path(self, output_dir: str, file_stem: str) -> Optional[Path]:
+        """查找content_list.json文件路径"""
+        output_path = Path(output_dir)
+        
+        # 首先尝试基本路径
+        content_list_path = output_path / f'{file_stem}_content_list.json'
+        if content_list_path.exists():
+            return content_list_path
+        
+        # 尝试子目录路径（MinerU 2.0）
+        subdir = output_path / file_stem
+        if subdir.exists():
+            method = "auto"  # 或从配置中获取
+            content_list_path = subdir / method / f'{file_stem}_content_list.json'
+            if content_list_path.exists():
+                return content_list_path
+        
+        return None
+
+    def _load_content_list(self, content_list_path: Path) -> Optional[List[Dict]]:
+        """加载content_list.json文件"""
+        try:
+            import json
+            with open(content_list_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"加载content_list.json失败: {e}")
+            return None
+
+    async def _process_content_list_captions(self, content_list: List[Dict], output_dir: str):
+        """异步处理内容列表中的图片描述"""
+        if not self.auto_caption or not self.caption_llm:
+            return
+            
+        import json
+        from pathlib import Path
+        
+        updated = False
+        output_dir_path = Path(output_dir)
+        
+        for content in content_list:
+            if content.get('type') == 'image' and not content.get('image_caption'):
+                img_path = content.get('img_path', '')
+                if img_path:
+                    # 处理相对路径和绝对路径
+                    image_path = Path(img_path) if Path(img_path).is_absolute() else output_dir_path / img_path
+                        
+                    if image_path.exists():
+                        caption = await self._generate_image_caption(image_path)
+                        if caption:
+                            if 'image_caption' not in content:
+                                content['image_caption'] = []
+                            content['image_caption'].append(caption)
+                            updated = True
+                            logger.info(f"为图片 {image_path.name} 添加描述")
+        
+        # 保存更新
+        if updated:
+            self._save_content_list(content_list, output_dir_path)
+
+    def _save_content_list(self, content_list: List[Dict], output_dir_path: Path):
+        """保存content_list到文件"""
+        import json
+        
+        # 查找现有的content_list文件
+        existing_files = list(output_dir_path.glob('*_content_list.json'))
+        if existing_files:
+            content_list_path = existing_files[0]
+        else:
+            file_stem = output_dir_path.name
+            content_list_path = output_dir_path / f'{file_stem}_content_list.json'
+        
+        try:
+            with open(content_list_path, 'w', encoding='utf-8') as f:
+                json.dump(content_list, f, ensure_ascii=False, indent=2)
+            logger.info(f"已更新 {content_list_path}")
+        except Exception as e:
+            logger.error(f"保存content_list.json失败: {e}")
+
+    async def _process_multimodal_content_v2(self, parse_result, file_path) -> int:
+        """处理多模态内容（参考Vision_RAG的向量化逻辑）"""
+        # 准备多模态内容列表
+        prepared_chunks = []
+        
+        # 处理文本块
+        if parse_result.image and 'text_chunks' in parse_result.image:
+            for i, text_chunk in enumerate(parse_result.image['text_chunks']):
+                chunk_data = {
+                    'content': text_chunk['content'],
+                    'metadata': {
+                        'source_file': file_path.name,
+                        'chunk_type': 'text',
+                        'chunk_id': f"{file_path.stem}_text_{i}",
+                        'page_idx': text_chunk.get('page', 0),
+                        'chunk_idx': i,
+                        'parent_document': file_path.name,
+                        'embedding_type': 'text',
+                        **parse_result.metadata
+                    }
+                }
+                prepared_chunks.append(chunk_data)
+        
+        # 处理图像
+        if parse_result.image and 'images' in parse_result.image:
+            for i, img in enumerate(parse_result.image['images']):
+                # 准备图像内容描述
+                image_content = f"[图像 - 页面 {img.get('page', 0)}]"
+                if 'caption' in img:
+                    image_content += f"\n描述: {img['caption']}"
+                
+                chunk_data = {
+                    'content': image_content,
+                    'metadata': {
+                        'source_file': file_path.name,
+                        'chunk_type': 'image',
+                        'chunk_id': f"{file_path.stem}_image_{i}",
+                        'page_idx': img.get('page', 0),
+                        'chunk_idx': i,
+                        'parent_document': file_path.name,
+                        'embedding_type': 'visual',
+                        'image_path': img.get('path'),
+                        **parse_result.metadata
+                    }
+                }
+                
+                # 添加Base64图像数据（参考Vision_RAG的做法）
+                if 'data' in img:
+                    image_base64 = base64.b64encode(img['data']).decode('utf-8')
+                    chunk_data['original_content'] = image_base64
+                    chunk_data['metadata']['has_original_content'] = True
+                
+                prepared_chunks.append(chunk_data)
+        
+        # 检查重复项（参考Vision_RAG的重复检测逻辑）
+        new_chunks = []
+        for chunk_data in prepared_chunks:
+            # 生成基于内容的唯一ID
+            content_id = self._generate_content_id(
+                chunk_data['content'], 
+                chunk_data['metadata']
+            )
+            
+            # 检查是否已存在（简化版本，实际可以查询向量数据库）
+            chunk_data['doc_id'] = content_id
+            new_chunks.append(chunk_data)
+        
+        # 批量向量化和存储
+        vector_docs = []
+        for chunk_data in new_chunks:
+            # 根据类型选择嵌入方式
+            if chunk_data['metadata']['embedding_type'] == 'visual':
+                # 使用多模态嵌入器处理图像
+                embedding_result = await self._multimodal_embedder.generate_embeddings([
+                    {
+                        'type': 'image',
+                        'content': chunk_data.get('original_content', ''),
+                        'metadata': chunk_data['metadata']
+                    }
+                ])
+                embedding = embedding_result[0].embedding if embedding_result else None
+            else:
+                # 使用文本嵌入器处理文本
+                embedding_result = await self._embedder.embed_text(chunk_data['content'])
+                embedding = embedding_result.embedding if embedding_result else None
+            
+            if embedding:
+                # 清理元数据
+                metadata = clean_metadata(chunk_data['metadata'])
+                
+                vector_doc = VectorDocument(
+                    id=chunk_data['doc_id'],
+                    text=chunk_data['content'],
+                    embedding=embedding,
+                    metadata=metadata
+                )
+                vector_docs.append(vector_doc)
+        
+        # 存储到向量数据库
+        if vector_docs:
+            with log_process("Vector Storage"):
+                await self._vector_store.add_documents(vector_docs)
+            
+            # 添加文本内容到BM25索引
+            if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
+                text_docs = [doc for doc in vector_docs if doc.metadata.get('chunk_type') == 'text']
+                if text_docs:
+                    with log_process("BM25 Indexing"):
+                        documents = [doc.text for doc in text_docs]
+                        doc_ids = [doc.id for doc in text_docs]
+                        metadata_list = [doc.metadata for doc in text_docs]
+                        
+                        await self._retriever._bm25_index.add_documents(
+                            documents, doc_ids, metadata_list
+                        )
+        
+        return len(vector_docs)
+    
+    def _generate_content_id(self, content: str, metadata: dict) -> str:
+        """生成基于内容的唯一ID（参考Vision_RAG的实现）"""
+        import hashlib
+        
+        # 创建用于生成ID的字符串
+        id_components = [content]
+        
+        if metadata:
+            # 添加关键元数据
+            if 'source_file' in metadata:
+                id_components.append(metadata['source_file'])
+            if 'page_idx' in metadata:
+                id_components.append(str(metadata['page_idx']))
+            if 'chunk_type' in metadata:
+                id_components.append(metadata['chunk_type'])
+        
+        # 生成MD5哈希作为ID
+        content_str = '|'.join(id_components)
+        return hashlib.md5(content_str.encode('utf-8')).hexdigest()
+
 
     async def close(self):
         """关闭引擎，释放资源。"""

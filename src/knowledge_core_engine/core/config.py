@@ -118,6 +118,13 @@ class RAGConfig:
     
     # Deprecated - will be removed in future version
     extra_params: Dict[str, Any] = field(default_factory=dict)
+
+    # 切片配置
+    max_chunk_size: int = 1000  # 最大切片大小（字符数）
+    min_chunk_size: int = 100   # 最小切片大小（字符数）
+    overlap_size: int = 100     # 重叠大小（字符数）
+    preserve_sentences: bool = True  # 保持句子完整性
+    preserve_paragraphs: bool = True  # 保持段落完整性
     
     def __post_init__(self):
         """Auto-configure defaults based on providers."""

@@ -13,6 +13,7 @@ from knowledge_core_engine.utils.logger import get_logger, log_detailed, log_ste
 
 # 在导入部分添加
 from knowledge_core_engine.core.parsing.parsers.multimodal_pdf_parser import MultimodalPDFParser
+from knowledge_core_engine.core.parsing.parsers.mineru_parser import MineruParser
 
 logger = get_logger(__name__)
 
@@ -63,6 +64,14 @@ class DocumentProcessor:
         self._multimodal_pdf_parser = MultimodalPDFParser()
         self._image_parser = ImageParser()
         
+        # MinerU PDF parser
+        try:
+            self._mineru_parser = MineruParser()
+            logger.info("MinerU PDF parser initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize MinerU PDF parser: {e}")
+            self._mineru_parser = None
+        
         # LlamaParse for complex documents
         self._llama_parser = LlamaParseWrapper(**llama_parse_kwargs)
         
@@ -70,9 +79,9 @@ class DocumentProcessor:
         self._parsers: Dict[str, BaseParser] = {
             '.txt': self._text_parser,
             '.md': self._markdown_parser,
-            # 直接使用多模态PDF解析器
-            '.pdf': self._multimodal_pdf_parser,
-            '.docx': self._llama_parser,
+            # Use MinerU parser for PDF if available, otherwise fallback to multimodal
+            '.pdf': self._mineru_parser if self._mineru_parser else self._multimodal_pdf_parser,
+            '.docx': self._mineru_parser if self._mineru_parser else self._llama_parser,
             '.doc': self._llama_parser,
             '.pptx': self._llama_parser,
             '.ppt': self._llama_parser,
