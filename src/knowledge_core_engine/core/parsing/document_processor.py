@@ -188,7 +188,10 @@ class DocumentProcessor:
             
             return ParseResult(
                 markdown=data['markdown'],
-                metadata=data['metadata']
+                metadata=data['metadata'],
+                file_path=str(data['metadata']['file_path']),
+                file_type=data['metadata']['file_type'],
+                output_dir=str(data['metadata']['output_dir'])
             )
         except Exception as e:
             logger.warning(f"Error reading cache for {file_path.name}: {e}")

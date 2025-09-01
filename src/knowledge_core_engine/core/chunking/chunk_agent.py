@@ -85,7 +85,7 @@ class Chunk:
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
-        return {
+        result = {
             'chunk_id': self.chunk_id,
             'chunk_type': self.chunk_type,
             'content': self.content,
@@ -98,6 +98,12 @@ class Chunk:
             'parent_document': self.parent_document,
             'content_path': self.content_path
         }
+        
+        # 将embedding_type提升到顶层
+        if 'embedding_type' in self.metadata:
+            result['embedding_type'] = self.metadata['embedding_type']
+        
+        return result
 
 
 class ChunkAgent:
@@ -449,6 +455,7 @@ class ChunkAgent:
                         metadata={
                             'chunk_strategy': 'semantic_boundaries',
                             'text_items_count': len(current_items),
+                            'embedding_type': 'text',
                             'created_at': datetime.now().isoformat()
                         }
                     )
@@ -478,6 +485,7 @@ class ChunkAgent:
                 metadata={
                     'chunk_strategy': 'semantic_boundaries',
                     'text_items_count': len(current_items),
+                    'embedding_type': 'text',
                     'created_at': datetime.now().isoformat()
                 }
             )
@@ -532,6 +540,7 @@ class ChunkAgent:
                     parent_document=document_name,
                     metadata={
                         'chunk_strategy': 'fixed_size',
+                        'embedding_type': 'text',
                         'created_at': datetime.now().isoformat()
                     }
                 )
@@ -553,6 +562,7 @@ class ChunkAgent:
         metadata = {
             'chunk_strategy': 'document_structure',
             'text_items_count': len(text_items),
+            'embedding_type': 'text',
             'has_title': any(item.get('text_level', 0) > 0 for item in text_items),
             'created_at': datetime.now().isoformat()
         }

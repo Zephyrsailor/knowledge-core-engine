@@ -259,13 +259,11 @@ class KnowledgeEngine:
         
         # 初始化ChromaAgent
         try:
-            # 获取数据库管理器（从vector_store中获取）
-            db_manager = getattr(self._vector_store._provider, '_collection', None)
             config = {
                 'output_dir': getattr(self.config, 'output_dir', './output'),
                 'cls_dir': getattr(self.config, 'cls_dir', 'cls')
             }
-            self._chroma_agent = ChromaAgent(db_manager=db_manager, config=config)
+            self._chroma_agent = ChromaAgent(vector_store=self._vector_store, config=config)
             logger.info("ChromaAgent initialized successfully")
         except Exception as e:
             logger.warning(f"Failed to initialize ChromaAgent: {e}")
@@ -528,36 +526,36 @@ class KnowledgeEngine:
                                 duplicate_check, file_path
                             )
                             total_chunks += chunk_count
-                    else:
-                        # 如果解析失败，使用原有逻辑作为fallback
-                        # 检查是否有多模态数据 - 参考Vision_RAG的逻辑
-                        has_multimodal_data = False
-                        
-                        # 检查解析结果中的图像数据
-                        if parse_result.image is not None:
-                            # 支持多种图像数据格式
-                            if isinstance(parse_result.image, list) and len(parse_result.image) > 0:
-                                # 图像列表格式
-                                has_multimodal_data = True
-                            elif isinstance(parse_result.image, dict):
-                                # 字典格式，检查是否包含图像
-                                if ('images' in parse_result.image and 
-                                    len(parse_result.image['images']) > 0):
-                                    has_multimodal_data = True
-                                # 检查是否有其他多模态内容
-                                elif any(key in parse_result.image for key in 
-                                       ['text_chunks', 'tables', 'equations']):
-                                    has_multimodal_data = True
-                        
-                        # 根据Vision_RAG的处理逻辑选择处理方式
-                        if has_multimodal_data and self._multimodal_embedder:
-                            # 使用多模态处理流程 - 采用Vision_RAG的向量化策略
-                            chunk_count = await self._process_multimodal_content_v2(parse_result, file_path)
-                            total_chunks += chunk_count
-                        else:
-                            # 使用原有的处理流程（只处理文本）
-                            chunk_count = await self._process_standard_content(parse_result, file_path)
-                            total_chunks += chunk_count
+                    # else:
+                    #     # 如果解析失败，使用原有逻辑作为fallback
+                    #     # 检查是否有多模态数据 - 参考Vision_RAG的逻辑
+                    #     has_multimodal_data = False
+                    #
+                    #     # 检查解析结果中的图像数据
+                    #     if parse_result.image is not None:
+                    #         # 支持多种图像数据格式
+                    #         if isinstance(parse_result.image, list) and len(parse_result.image) > 0:
+                    #             # 图像列表格式
+                    #             has_multimodal_data = True
+                    #         elif isinstance(parse_result.image, dict):
+                    #             # 字典格式，检查是否包含图像
+                    #             if ('images' in parse_result.image and
+                    #                 len(parse_result.image['images']) > 0):
+                    #                 has_multimodal_data = True
+                    #             # 检查是否有其他多模态内容
+                    #             elif any(key in parse_result.image for key in
+                    #                    ['text_chunks', 'tables', 'equations']):
+                    #                 has_multimodal_data = True
+                    #
+                    #     # 根据Vision_RAG的处理逻辑选择处理方式
+                    #     if has_multimodal_data and self._multimodal_embedder:
+                    #         # 使用多模态处理流程 - 采用Vision_RAG的向量化策略
+                    #         chunk_count = await self._process_multimodal_content_v2(parse_result, file_path)
+                    #         total_chunks += chunk_count
+                    #     else:
+                    #         # 使用原有的处理流程（只处理文本）
+                    #         chunk_count = await self._process_standard_content(parse_result, file_path)
+                    #         total_chunks += chunk_count
 
             except Exception as e:
                 logger.error(f"Failed to process {file_path}: {e}")
@@ -1234,10 +1232,11 @@ class KnowledgeEngine:
             # 根据类型选择嵌入方式
             if chunk_data['metadata']['embedding_type'] == 'visual' and self._multimodal_embedder:
                 # 使用多模态嵌入器处理图像
+                img_type = Path(chunk_data['metadata']['image_path']).suffix[1:].lower()
                 embedding_result = await self._multimodal_embedder.generate_embeddings([
                     {
                         'type': 'image',
-                        'content': chunk_data.get('original_content', ''),
+                        'content': f"data:image/{img_type};base64,{chunk_data.get('original_content', '')}",
                         'metadata': chunk_data['metadata']
                     }
                 ])

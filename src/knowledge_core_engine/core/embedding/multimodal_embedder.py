@@ -91,37 +91,38 @@ class MultimodalEmbedder:
             logger.error(f"Text embedding error: {e}")
             return self._create_zero_embedding()
     
-    async def _embed_image(self, image_data: Dict[str, Any]) -> EmbeddingResult:
+    async def _embed_image(self, image_data: str) -> EmbeddingResult:
         """生成图像嵌入"""
         try:
             # 处理图像数据
-            img_bytes = image_data["data"]
-            img = Image.open(io.BytesIO(img_bytes))
-            img = img.convert("RGB")
-            buffered = io.BytesIO()
-            img.save(buffered, format="JPEG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
-            
-            # 尝试多种API调用格式
-            resp = None
-            formats = [
-                [f"data:image/jpeg;base64,{img_str}"],
-                f"data:image/jpeg;base64,{img_str}",
-                {"image": f"data:image/jpeg;base64,{img_str}"}
-            ]
-            
-            for fmt in formats:
-                try:
-                    resp = dashscope.MultiModalEmbedding.call(
-                        model="multimodal-embedding-v1",
-                        api_key=dashscope.api_key,
-                        input=fmt
-                    )
-                    if resp.status_code == 200:
-                        break
-                except Exception as e:
-                    logger.debug(f"Image embedding format failed: {e}")
-                    continue
+            # img_bytes = image_data["data"]
+            # img_bytes = image_data
+            # img = Image.open(io.BytesIO(img_bytes))
+            # img = img.convert("RGB")
+            # buffered = io.BytesIO()
+            # img.save(buffered, format="JPEG")
+            # img_str = base64.b64encode(buffered.getvalue()).decode()
+            #
+            # # 尝试多种API调用格式
+            # resp = None
+            # formats = [
+            #     [f"data:image/jpeg;base64,{img_str}"],
+            #     f"data:image/jpeg;base64,{img_str}",
+            #     {"image": f"data:image/jpeg;base64,{img_str}"}
+            # ]
+            #
+            # for fmt in formats:
+            # try:
+            resp = dashscope.MultiModalEmbedding.call(
+                model="multimodal-embedding-v1",
+                api_key=dashscope.api_key,
+                input=[{'image': image_data}]
+            )
+                #     if resp.status_code == 200:
+                #         break
+            # except Exception as e:
+            #     logger.debug(f"Image embedding format failed: {e}")
+                #     continue
             
             if resp and resp.status_code == 200 and hasattr(resp, 'output') and resp.output:
                 # 修复：正确提取嵌入向量，与文本嵌入处理保持一致
@@ -158,14 +159,12 @@ class MultimodalEmbedder:
                     return self._create_zero_embedding()
                 
                 return EmbeddingResult(
-                    text=f"Image from page {image_data.get('page', 'unknown')}",
+                    text="Image",
                     embedding=embedding,
                     model="multimodal-embedding-v1",
                     usage=getattr(resp, 'usage', {}),
                     metadata={
-                        "type": "image",
-                        "page": image_data.get('page'),
-                        "index": image_data.get('index')
+                        "type": "image"
                     }
                 )
             else:
