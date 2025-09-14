@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "knowledge-core-engine"
-version = "0.2.0"
+version = "0.2.6"
 description = "Next-generation knowledge base engine with advanced RAG capabilities"
 readme = "README.md"
 authors = [
@@ -50,6 +50,7 @@ dependencies = [
     
     # Text processing
     "bm25s>=0.1.0",  # Fast and lightweight BM25 implementation
+    "mineru[core]>=0.2.0",
     
     # LLM providers
     "dashscope>=1.14.0",
@@ -66,6 +67,8 @@ dependencies = [
     "ragas>=0.1.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
+    "reportlab>=4.4.3",
+
 ]
 
 [project.optional-dependencies]

@@ -1000,6 +1000,46 @@ class KnowledgeEngine:
             return_stats=return_stats
         )
 
+
+
+    async def document_detail(
+        self,
+        kb_id: str,
+        file_id: str,
+        include_embeddings: bool = False,
+        chunk_limit: Optional[int] = None,
+        deduplicate: bool = True
+    ) -> Dict[str, Any]:
+        """获取文档的详细切片信息。
+        
+        Args:
+            kb_id: 知识库ID（当前实现中暂未使用，为未来多知识库支持预留）
+            file_id: 文件ID或文件名
+            include_embeddings: 是否包含嵌入向量数据
+            chunk_limit: 限制返回的切片数量，None表示返回所有
+            deduplicate: 是否对切片进行去重处理（合并双入库的图像和表格切片）
+            
+        Returns:
+            包含文档详细信息和切片数据的字典
+        """
+        await self._ensure_initialized()
+        
+        # 使用ChromaAgent处理文档详情查询
+        if not hasattr(self, '_chroma_agent') or self._chroma_agent is None:
+            # 初始化ChromaAgent
+            from .core.embedding.chroma_agent import ChromaAgent
+            self._chroma_agent = ChromaAgent(
+                vector_store=self._vector_store,
+                config=self.config.dict() if hasattr(self.config, 'dict') else {}
+            )
+        
+        return self._chroma_agent.get_document_detail(
+            file_id=file_id,
+            include_embeddings=include_embeddings,
+            chunk_limit=chunk_limit,
+            deduplicate=deduplicate
+        )
+
     async def _process_standard_content(self, parse_result, file_path) -> int:
         """处理标准文本内容（非多模态）"""
         # 分块处理
@@ -1206,11 +1246,17 @@ class KnowledgeEngine:
         
         for chunk_data in chunks_data:
             # 生成基于内容的唯一ID
-            content_id = self._generate_content_id(
-                chunk_data['content'], 
-                chunk_data['metadata']
-            )
-            chunk_data['doc_id'] = content_id
+            # content_id = self._generate_content_id(
+            #     chunk_data['content'], 
+            #     chunk_data['metadata']
+            # )
+            # chunk_data['doc_id'] = content_id
+            if 'chunk_id' in chunk_data['metadata']:
+                chunk_data['doc_id'] = chunk_data['metadata']['chunk_id']
+            else:
+                # fallback：生成UUID
+                import uuid
+                chunk_data['doc_id'] = str(uuid.uuid4())
             
             # 简单的重复检测逻辑
             # TODO: 实现更精确的重复检测
@@ -1232,7 +1278,8 @@ class KnowledgeEngine:
             # 根据类型选择嵌入方式
             if chunk_data['metadata']['embedding_type'] == 'visual' and self._multimodal_embedder:
                 # 使用多模态嵌入器处理图像
-                img_type = Path(chunk_data['metadata']['image_path']).suffix[1:].lower()
+                image_path = chunk_data['metadata'].get('table_image_path') or chunk_data['metadata'].get('image_path')
+                img_type = Path(image_path).suffix[1:].lower()
                 embedding_result = await self._multimodal_embedder.generate_embeddings([
                     {
                         'type': 'image',
