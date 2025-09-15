@@ -13,6 +13,7 @@ Date: 2025-08-28
 import os
 import base64
 import logging
+import re
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from ..chunking.chunk_agent import Chunk, ChunkType
@@ -264,10 +265,13 @@ class ChromaAgent:
                 )
                 
                 # 支持多种匹配方式
+                uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_'
+                merg = re.sub(uuid_pattern, '', doc_source)
                 if (doc_source == file_id or  # 完全匹配
                     doc_source.endswith(file_id) or  # 文件名匹配
                     Path(doc_source).name == file_id or  # 提取文件名匹配
-                    Path(doc_source).stem == Path(file_id).stem):  # stem匹配
+                    Path(doc_source).stem == Path(file_id).stem or  # stem匹配
+                    Path(merg).stem == Path(file_id).stem): # 去掉hash的文件名前缀
                     matching_ids.append(all_docs['ids'][i])
             
             if not matching_ids:

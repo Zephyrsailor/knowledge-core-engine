@@ -82,12 +82,12 @@ class DocumentProcessor:
             # Use MinerU parser for PDF if available, otherwise fallback to multimodal
             '.pdf': self._mineru_parser if self._mineru_parser else self._multimodal_pdf_parser,
             '.docx': self._mineru_parser if self._mineru_parser else self._llama_parser,
-            '.doc': self._llama_parser,
+            '.doc': self._mineru_parser if self._mineru_parser else self._llama_parser,
             '.pptx': self._llama_parser,
             '.ppt': self._llama_parser,
-            '.xlsx': self._llama_parser,
-            '.xls': self._llama_parser,
-            '.csv': self._llama_parser,
+            '.xlsx': self._mineru_parser if self._mineru_parser else self._llama_parser,
+            '.xls': self._mineru_parser if self._mineru_parser else self._llama_parser,
+            '.csv': self._mineru_parser if self._mineru_parser else self._llama_parser,
             '.jpg': self._image_parser,
             '.png': self._image_parser,
         }
