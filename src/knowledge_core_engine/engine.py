@@ -12,6 +12,7 @@ from pathlib import Path
 import os
 import base64
 import json
+from datetime import datetime
 
 
 
@@ -1602,6 +1603,290 @@ class KnowledgeEngine:
         content_str = '|'.join(id_components)
         return hashlib.md5(content_str.encode('utf-8')).hexdigest()
 
+
+    @log_step("Update Image Chunk Content")
+    async def update_image_chunk_content(
+        self,
+        chunk_id: str,
+        new_content: str,
+        regenerate_embedding: bool = True
+    ) -> Dict[str, Any]:
+        """更新图像类型chunk的content内容。
+        
+        Args:
+            chunk_id: 要更新的chunk ID
+            new_content: 新的content内容
+            regenerate_embedding: 是否重新生成嵌入向量（默认True）
+            
+        Returns:
+            更新结果统计
+            
+        Example:
+            # 更新图像chunk的描述
+            result = await engine.update_image_chunk_content(
+                chunk_id="doc_image_1",
+                new_content="这是一张展示深度学习架构的图表，包含输入层、隐藏层和输出层。"
+            )
+        """
+        await self._ensure_initialized()
+        
+        try:
+            # 1. 验证chunk存在性和类型
+            with log_process("Validating Chunk"):
+                # 从向量数据库获取现有chunk
+                existing_doc = await self._vector_store.get_document(chunk_id)
+                if not existing_doc:
+                    raise ValueError(f"Chunk with ID '{chunk_id}' not found")
+                
+                # 验证chunk类型
+                chunk_type = existing_doc.metadata.get('chunk_type', '')
+                if chunk_type != 'image':
+                    raise ValueError(f"Chunk '{chunk_id}' is not an image type (current type: {chunk_type})")
+                
+                logger.info(f"Found image chunk '{chunk_id}' for content update")
+            
+            # 2. 准备更新数据
+            updated_metadata = existing_doc.metadata.copy()
+            updated_metadata['content_updated_at'] = str(datetime.now().isoformat())
+            updated_metadata['original_content'] = existing_doc.text  # 保存原始内容
+            
+            # 3. 重新生成嵌入向量（如果需要）
+            new_embedding = None
+            if regenerate_embedding:
+                with log_process("Regenerating Embedding"):
+                    # 根据embedding_type选择合适的嵌入方式
+                    embedding_type = updated_metadata.get('embedding_type', 'text')
+                    
+                    if embedding_type == 'visual' and self._multimodal_embedder:
+                        # 使用多模态嵌入器
+                        # 如果有原始图像数据，使用图像嵌入
+                        if updated_metadata.get('has_original_content') and 'original_content' in existing_doc.metadata:
+                            original_content = existing_doc.metadata.get('original_content', '')
+                            embedding_result = await self._multimodal_embedder.generate_embeddings([
+                                {
+                                    'type': 'image',
+                                    'content': f"data:image/jpeg;base64,{original_content}",
+                                    'metadata': updated_metadata
+                                }
+                            ])
+                            new_embedding = embedding_result[0].embedding if embedding_result else None
+                        else:
+                            # 如果没有原始图像数据，使用文本嵌入
+                            embedding_result = await self._embedder.embed_text(new_content)
+                            new_embedding = embedding_result.embedding if embedding_result else None
+                    else:
+                        # 使用文本嵌入器
+                        embedding_result = await self._embedder.embed_text(new_content)
+                        new_embedding = embedding_result.embedding if embedding_result else None
+                    
+                    if not new_embedding:
+                        logger.warning(f"Failed to generate new embedding for chunk '{chunk_id}'")
+                        new_embedding = existing_doc.embedding  # 使用原有嵌入
+            else:
+                new_embedding = existing_doc.embedding
+            
+            # 4. 创建更新后的向量文档
+            updated_vector_doc = VectorDocument(
+                id=chunk_id,
+                text=new_content,
+                embedding=new_embedding,
+                metadata=clean_metadata(updated_metadata)
+            )
+            
+            # 5. 更新向量数据库
+            with log_process("Updating Vector Store"):
+                # 删除旧文档
+                await self._vector_store.delete_documents([chunk_id])
+                # 添加新文档
+                await self._vector_store.add_documents([updated_vector_doc])
+                logger.info(f"Updated vector store for chunk '{chunk_id}'")
+            
+            # 6. 更新BM25索引（如果存在）
+            bm25_updated = False
+            if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
+                with log_process("Updating BM25 Index"):
+                    try:
+                        # 删除旧索引
+                        await self._retriever._bm25_index.delete_documents([chunk_id])
+                        # 添加新索引
+                        await self._retriever._bm25_index.add_documents(
+                            documents=[new_content],
+                            doc_ids=[chunk_id],
+                            metadata=[updated_metadata]
+                        )
+                        bm25_updated = True
+                        logger.info(f"Updated BM25 index for chunk '{chunk_id}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to update BM25 index: {e}")
+            
+            # 7. 返回更新结果
+            result = {
+                "chunk_id": chunk_id,
+                "success": True,
+                "original_content": existing_doc.text,
+                "new_content": new_content,
+                "content_length_change": len(new_content) - len(existing_doc.text),
+                "embedding_regenerated": regenerate_embedding,
+                "vector_store_updated": True,
+                "bm25_index_updated": bm25_updated,
+                "updated_at": updated_metadata['content_updated_at']
+            }
+            
+            logger.info(f"Successfully updated image chunk '{chunk_id}' content")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to update image chunk content: {e}")
+            return {
+                "chunk_id": chunk_id,
+                "success": False,
+                "error": str(e)
+            }
+
+    @log_step("Batch Update Image Chunks Content")
+    async def batch_update_image_chunks_content(
+        self,
+        updates: List[Dict[str, str]],
+        regenerate_embedding: bool = True
+    ) -> Dict[str, Any]:
+        """批量更新多个图像chunk的content内容。
+        
+        Args:
+            updates: 更新列表，每个元素包含 {'chunk_id': str, 'new_content': str}
+            regenerate_embedding: 是否重新生成嵌入向量
+            
+        Returns:
+            批量更新结果统计
+            
+        Example:
+            # 批量更新多个图像chunk
+            updates = [
+                {'chunk_id': 'doc_image_1', 'new_content': '新的图像描述1'},
+                {'chunk_id': 'doc_image_2', 'new_content': '新的图像描述2'}
+            ]
+            result = await engine.batch_update_image_chunks_content(updates)
+        """
+        await self._ensure_initialized()
+        
+        total_updates = len(updates)
+        successful_updates = []
+        failed_updates = []
+        
+        logger.info(f"Starting batch update of {total_updates} image chunks")
+        
+        for i, update in enumerate(updates):
+            chunk_id = update.get('chunk_id')
+            new_content = update.get('new_content')
+            
+            if not chunk_id or not new_content:
+                failed_updates.append({
+                    'chunk_id': chunk_id or 'unknown',
+                    'error': 'Missing chunk_id or new_content'
+                })
+                continue
+            
+            try:
+                with log_process(f"Updating chunk {i+1}/{total_updates}"):
+                    result = await self.update_image_chunk_content(
+                        chunk_id=chunk_id,
+                        new_content=new_content,
+                        regenerate_embedding=regenerate_embedding
+                    )
+                    
+                    if result.get('success'):
+                        successful_updates.append(result)
+                    else:
+                        failed_updates.append({
+                            'chunk_id': chunk_id,
+                            'error': result.get('error', 'Unknown error')
+                        })
+                        
+            except Exception as e:
+                failed_updates.append({
+                    'chunk_id': chunk_id,
+                    'error': str(e)
+                })
+        
+        batch_result = {
+            'total_requested': total_updates,
+            'successful_count': len(successful_updates),
+            'failed_count': len(failed_updates),
+            'successful_updates': successful_updates,
+            'failed_updates': failed_updates,
+            'success_rate': len(successful_updates) / total_updates if total_updates > 0 else 0
+        }
+        
+        logger.info(f"Batch update completed: {len(successful_updates)}/{total_updates} successful")
+        return batch_result
+
+    @log_step("Get Image Chunk Content")
+    async def get_image_chunk_content(
+        self,
+        chunk_id: str,
+        include_metadata: bool = False
+    ) -> Dict[str, Any]:
+        """获取图像chunk的当前content内容。
+        
+        Args:
+            chunk_id: chunk ID
+            include_metadata: 是否包含完整的元数据
+            
+        Returns:
+            chunk内容信息
+            
+        Example:
+            # 获取图像chunk内容
+            content_info = await engine.get_image_chunk_content("doc_image_1")
+            print(content_info['content'])
+        """
+        await self._ensure_initialized()
+        
+        try:
+            # 从向量数据库获取chunk
+            existing_doc = await self._vector_store.get_document(chunk_id)
+            if not existing_doc:
+                return {
+                    'chunk_id': chunk_id,
+                    'found': False,
+                    'error': 'Chunk not found'
+                }
+            
+            # 验证chunk类型
+            chunk_type = existing_doc.metadata.get('chunk_type', '')
+            if chunk_type != 'image':
+                return {
+                    'chunk_id': chunk_id,
+                    'found': True,
+                    'is_image_chunk': False,
+                    'actual_chunk_type': chunk_type,
+                    'error': f'Chunk is not an image type (current type: {chunk_type})'
+                }
+            
+            result = {
+                'chunk_id': chunk_id,
+                'found': True,
+                'is_image_chunk': True,
+                'content': existing_doc.text,
+                'content_length': len(existing_doc.text),
+                'chunk_type': chunk_type,
+                'embedding_type': existing_doc.metadata.get('embedding_type', 'unknown'),
+                'has_original_content': existing_doc.metadata.get('has_original_content', False),
+                'last_updated': existing_doc.metadata.get('content_updated_at'),
+                'original_content_preserved': 'original_content' in existing_doc.metadata
+            }
+            
+            if include_metadata:
+                result['full_metadata'] = existing_doc.metadata
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get image chunk content: {e}")
+            return {
+                'chunk_id': chunk_id,
+                'found': False,
+                'error': str(e)
+            }
 
     async def close(self):
         """关闭引擎，释放资源。"""
