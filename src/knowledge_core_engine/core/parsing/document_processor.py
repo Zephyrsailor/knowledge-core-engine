@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -66,7 +67,10 @@ class DocumentProcessor:
         
         # MinerU PDF parser
         try:
-            self._mineru_parser = MineruParser()
+            mineru_config = {
+                "OUTPUT_DIR": os.getenv("OUTPUT_DIR")
+            }
+            self._mineru_parser = MineruParser(config=mineru_config)
             logger.info("MinerU PDF parser initialized successfully")
         except Exception as e:
             logger.warning(f"Failed to initialize MinerU PDF parser: {e}")

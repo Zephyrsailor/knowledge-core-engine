@@ -80,9 +80,11 @@ class MineruParser(BaseParser):
         try:
             start_time = time.time()
             # Prepare output directory
-            output_dir = self.config.get("output_dir")
+            output_dir = self.config.get("OUTPUT_DIR")
             if not output_dir:
-                output_dir = file_path.parent / "mineru_output" / file_path.stem
+                output_dir = file_path.parent / "parse_output" / file_path.stem
+            else:
+                output_dir = Path(output_dir)
             
             # Determine file type and parse accordingly
             if file_suffix == '.pdf':
