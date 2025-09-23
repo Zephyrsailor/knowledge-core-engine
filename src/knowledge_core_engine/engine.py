@@ -1277,7 +1277,7 @@ class KnowledgeEngine:
         
         for chunk_data in new_chunks:
             # 根据类型选择嵌入方式
-            if chunk_data['metadata']['embedding_type'] == 'visual' and self._multimodal_embedder:
+            if hasattr(chunk_data['metadata'],'embedding_type') and chunk_data['metadata']['embedding_type'] == 'visual' and self._multimodal_embedder:
                 # 使用多模态嵌入器处理图像
                 image_path = chunk_data['metadata'].get('table_image_path') or chunk_data['metadata'].get('image_path')
                 img_type = Path(image_path).suffix[1:].lower()
