@@ -10,6 +10,7 @@ KnowledgeCore Engine - 简洁的高级封装
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
 import os
+import asyncio
 import base64
 import json
 from datetime import datetime
@@ -22,6 +23,7 @@ from .core.chunking.pipeline import ChunkingPipeline
 from .core.chunking.enhanced_chunker import EnhancedChunker
 from .core.chunking.smart_chunker import SmartChunker
 from .core.chunking import ChunkAgent, ChunkConfig
+from .core.chunking.base import ChunkResult
 from .core.enhancement.metadata_enhancer import MetadataEnhancer, EnhancementConfig
 from .core.embedding.embedder import TextEmbedder
 from .core.embedding.vector_store import VectorStore, VectorDocument
@@ -1041,62 +1043,217 @@ class KnowledgeEngine:
             deduplicate=deduplicate
         )
 
+    async def _describe_html_tables(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """把 HTML 表格 chunk 转成自然语言描述用于 embedding（add_v2 专用）。
+
+        过滤条件：chunk_type == 'table' AND embedding_type == 'text' AND content 含 <table
+        处理：content 替换为 LLM 描述；HTML 原文保留在 metadata['table_content_html']
+        目的：避免 <table><tr><td> 这类标签稀释语义向量，保留 HTML 供生成阶段使用
+
+        复用 self._metadata_enhancer.llm_provider 作为 LLM，未启用 enhancer 时直接跳过。
+        """
+        if not self._metadata_enhancer or not chunks:
+            return chunks
+
+        targets = [
+            c for c in chunks
+            if c.get('metadata', {}).get('chunk_type') == 'table'
+            and c.get('metadata', {}).get('embedding_type') == 'text'
+            and '<table' in (c.get('content') or '')
+        ]
+        if not targets:
+            return chunks
+
+        await self._metadata_enhancer._ensure_initialized()
+        provider = self._metadata_enhancer.llm_provider
+        if not provider:
+            logger.warning("Table description skipped: LLM provider unavailable")
+            return chunks
+
+        semaphore = asyncio.Semaphore(self._metadata_enhancer.config.max_concurrent_requests)
+
+        async def _describe_one(c: Dict[str, Any]) -> None:
+            async with semaphore:
+                html = c['content']
+                prompt = self._build_table_description_prompt(html)
+                try:
+                    response = await provider.generate(
+                        messages=[
+                            {"role": "system", "content": "你是一个专业的文档分析助手，擅长把 HTML 表格翻译成精炼的中文自然语言描述。"},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=0.1,
+                        max_tokens=400,
+                    )
+                    desc = (response.get('content') or '').strip()
+                    if desc:
+                        c['metadata']['table_content_html'] = html
+                        c['metadata']['table_description_applied'] = True
+                        c['content'] = desc
+                    else:
+                        c['metadata']['table_description_failed'] = True
+                        logger.warning(f"Empty table description for chunk {c.get('doc_id')}")
+                except Exception as e:
+                    logger.error(f"Table description failed for {c.get('doc_id')}: {e}")
+                    c['metadata']['table_description_failed'] = True
+                    c['metadata']['table_description_error'] = str(e)
+
+        with log_process(f"Table HTML -> Description (n={len(targets)})"):
+            await asyncio.gather(*(_describe_one(c) for c in targets))
+
+        success = sum(1 for c in targets if c['metadata'].get('table_description_applied'))
+        logger.info(f"Table descriptions: {success}/{len(targets)} succeeded")
+        return chunks
+
+    def _build_table_description_prompt(self, html: str) -> str:
+        """构造 HTML → 自然语言描述的 prompt。"""
+        return (
+            "以下是从文档中提取的 HTML 表格。请用 2-4 句中文自然语言描述这个表格的主要内容，"
+            "突出用户可能会查询的关键信息（例如列含义、关键行数据、适用范围等），"
+            "避免直接复读 HTML 标签。\n\n"
+            f"HTML 表格：\n{html}\n\n"
+            "请直接输出描述文本，不要添加任何前缀、解释或 Markdown 标记。"
+        )
+
+    async def _enhance_text_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """统一的元数据增强入口（add / add_v2 共用）。
+
+        若未启用 MetadataEnhancer 则原样返回；启用则调用 LLM
+        给每个 chunk 注入 summary / questions / keywords / llm_chunk_type。
+
+        Args:
+            chunks: [{'content': str, 'metadata': dict, ...}, ...]
+
+        Returns:
+            原 list（in-place 增强 metadata）
+        """
+        if not self._metadata_enhancer or not chunks:
+            return chunks
+
+        with log_process("Metadata Enhancement"):
+            chunk_results = [
+                ChunkResult(
+                    content=c['content'],
+                    metadata=c['metadata'].copy(),
+                    start_char=0,
+                    end_char=len(c['content'])
+                )
+                for c in chunks
+            ]
+            enhanced = await self._metadata_enhancer.enhance_batch(chunk_results)
+
+            for orig, enh in zip(chunks, enhanced):
+                for key in ('summary', 'questions', 'keywords'):
+                    if key in enh.metadata:
+                        orig['metadata'][key] = enh.metadata[key]
+                # LLM 的语义分类用独立 key 存，避免覆盖 ChunkAgent 的结构 chunk_type
+                if 'chunk_type' in enh.metadata:
+                    orig['metadata']['llm_chunk_type'] = enh.metadata['chunk_type']
+
+        return chunks
+
+    def _build_embed_text(self, content: str, metadata: Dict[str, Any]) -> str:
+        """根据 use_multi_vector 决定用于嵌入的文本（add / add_v2 共用）。
+
+        开启时拼接 Content + Summary + Questions + Keywords；
+        关闭或缺字段时退化到裸 content。
+        """
+        if not getattr(self.config, 'use_multi_vector', False):
+            return content
+
+        parts = [f"Content: {content}"]
+        if metadata.get('summary'):
+            parts.append(f"Summary: {metadata['summary']}")
+        if metadata.get('questions'):
+            qs = metadata['questions']
+            qs_text = ' '.join(qs) if isinstance(qs, list) else str(qs)
+            parts.append(f"Questions: {qs_text}")
+        if metadata.get('keywords'):
+            kws = metadata['keywords']
+            kws_text = ', '.join(kws) if isinstance(kws, list) else str(kws)
+            parts.append(f"Keywords: {kws_text}")
+
+        return "\n\n".join(parts)
+
+    async def _index_text_chunks_to_bm25(self, vector_docs: List[VectorDocument]) -> None:
+        """把"走文本 embedding"的 chunk 索引到 BM25（add / add_v2 共用）。
+
+        入选规则（满足其一即入 BM25）：
+          1. 没有 chunk_type 字段（兼容 add 路径的裸文本 chunk）
+          2. chunk_type == 'text'
+          3. chunk_type 是 'table' / 'equation' 且 embedding_type == 'text'
+             （表格描述 / 公式文本这类非 'text' 结构类型但走文本 embedding 的）
+
+        排除：visual 分支的 chunk（图像/表格截图本体，通过多模态嵌入器入库）。
+        """
+        if not (self._retriever and getattr(self._retriever, '_bm25_index', None)):
+            return
+
+        def _should_index(meta: Dict[str, Any]) -> bool:
+            ctype = meta.get('chunk_type', 'text')
+            if ctype == 'text':
+                return True
+            # 非 text 结构类型，但走文本 embedding 路径的也要进 BM25
+            return meta.get('embedding_type') == 'text'
+
+        text_docs = [d for d in vector_docs if _should_index(d.metadata)]
+        if not text_docs:
+            return
+
+        with log_process("BM25 Indexing"):
+            await self._retriever._bm25_index.add_documents(
+                documents=[d.text for d in text_docs],
+                doc_ids=[d.id for d in text_docs],
+                metadata=[d.metadata for d in text_docs]
+            )
+
     async def _process_standard_content(self, parse_result, file_path) -> int:
         """处理标准文本内容（非多模态）"""
         # 分块处理
         with log_process("Text Chunking"):
             chunking_result = await self._chunker.process_parse_result(parse_result)
 
-        # 元数据增强
-        if self._metadata_enhancer:
-            with log_process("Metadata Enhancement"):
-                chunking_result = await self._metadata_enhancer.enhance_chunks(chunking_result)
+        # 转成统一 dict 格式喂给共用方法
+        chunks_data = [
+            {
+                'content': chunk.content,
+                'metadata': {
+                    **chunking_result.document_metadata,
+                    **chunk.metadata,
+                    'chunk_index': i,
+                    'total_chunks': len(chunking_result.chunks),
+                },
+                '_doc_id': f"{file_path.stem}_{i}_{chunk.start_char}",
+            }
+            for i, chunk in enumerate(chunking_result.chunks)
+        ]
 
-        # 生成嵌入向量
+        # 元数据增强（共用）
+        chunks_data = await self._enhance_text_chunks(chunks_data)
+
+        # 多向量嵌入文本（共用拼接逻辑）
         with log_process("Text Embedding"):
-            # 准备文本内容
-            texts = [chunk.content for chunk in chunking_result.chunks]
-            embeddings = await self._embedder.embed_batch(texts)
+            embed_texts = [self._build_embed_text(c['content'], c['metadata'])
+                           for c in chunks_data]
+            embeddings = await self._embedder.embed_batch(embed_texts)
 
-        # 创建向量文档
+        # 构造 VectorDocument
         vector_docs = []
-        for i, (chunk, embedding) in enumerate(zip(chunking_result.chunks, embeddings)):
-            # 生成文档ID
-            doc_id = f"{file_path.stem}_{i}_{chunk.start_char}"
+        for c, emb in zip(chunks_data, embeddings):
+            if not emb or not getattr(emb, 'embedding', None):
+                continue
+            vector_docs.append(VectorDocument(
+                id=c['_doc_id'],
+                text=c['content'],
+                embedding=emb.embedding,
+                metadata=clean_metadata(c['metadata'])
+            ))
 
-            # 清理元数据
-            metadata = clean_metadata({
-                **chunking_result.document_metadata,
-                **chunk.metadata,
-                'chunk_index': i,
-                'total_chunks': len(chunking_result.chunks)
-            })
-
-            vector_doc = VectorDocument(
-                id=doc_id,
-                text=chunk.content,
-                embedding=embedding.embedding,
-                metadata=metadata
-            )
-            vector_docs.append(vector_doc)
-
-        # 存储到向量数据库
-        with log_process("Vector Storage"):
-            await self._vector_store.add_documents(vector_docs)
-
-        # 添加到BM25索引
-        if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
-            with log_process("BM25 Indexing"):
-                # 分离文档数据为三个列表
-                documents = [doc.text for doc in vector_docs]
-                doc_ids = [doc.id for doc in vector_docs]
-                metadata_list = [doc.metadata for doc in vector_docs]
-                
-                await self._retriever._bm25_index.add_documents(
-                    documents=documents,
-                    doc_ids=doc_ids,
-                    metadata=metadata_list
-                )
+        # 入库
+        if vector_docs:
+            with log_process("Vector Storage"):
+                await self._vector_store.add_documents(vector_docs)
+            await self._index_text_chunks_to_bm25(vector_docs)
 
         return len(vector_docs)
 
@@ -1271,59 +1428,68 @@ class KnowledgeEngine:
         }
     
     async def _process_chunks_with_vectorization(self, duplicate_check: dict, file_path) -> int:
-        """处理切片并进行向量化"""
+        """处理切片并进行向量化（多模态版本：text 走共用文本流程，visual 单独走多模态嵌入器）"""
         new_chunks = duplicate_check['new_items']
-        vector_docs = []
-        
-        for chunk_data in new_chunks:
-            # 根据类型选择嵌入方式
-            if hasattr(chunk_data['metadata'],'embedding_type') and chunk_data['metadata']['embedding_type'] == 'visual' and self._multimodal_embedder:
-                # 使用多模态嵌入器处理图像
-                image_path = chunk_data['metadata'].get('table_image_path') or chunk_data['metadata'].get('image_path')
-                img_type = Path(image_path).suffix[1:].lower()
-                embedding_result = await self._multimodal_embedder.generate_embeddings([
-                    {
+
+        # 按嵌入类型分流（修复：原来用 hasattr 判 dict 属性恒为 False，视觉分支永不进入）
+        visual_chunks = [c for c in new_chunks
+                         if c['metadata'].get('embedding_type') == 'visual']
+        text_chunks = [c for c in new_chunks
+                       if c['metadata'].get('embedding_type') != 'visual']
+
+        vector_docs: List[VectorDocument] = []
+
+        # ---------- 文本分支：完全复用 add 路径的共用逻辑 ----------
+        if text_chunks:
+            # 表格 HTML → 自然语言描述（放在增强前，让 summary/questions 基于描述而非 HTML）
+            text_chunks = await self._describe_html_tables(text_chunks)
+            text_chunks = await self._enhance_text_chunks(text_chunks)
+
+            with log_process("Text Embedding"):
+                embed_texts = [self._build_embed_text(c['content'], c['metadata'])
+                               for c in text_chunks]
+                embeddings = await self._embedder.embed_batch(embed_texts)
+
+            for c, emb in zip(text_chunks, embeddings):
+                if not emb or not getattr(emb, 'embedding', None):
+                    continue
+                vector_docs.append(VectorDocument(
+                    id=c['doc_id'],
+                    text=c['content'],
+                    embedding=emb.embedding,
+                    metadata=clean_metadata(c['metadata'])
+                ))
+
+        # ---------- 视觉分支：add_v2 独有，逐个调多模态嵌入器 ----------
+        if visual_chunks and self._multimodal_embedder:
+            with log_process("Multimodal Embedding"):
+                for c in visual_chunks:
+                    image_path = (c['metadata'].get('table_image_path')
+                                  or c['metadata'].get('image_path'))
+                    if not image_path:
+                        logger.warning(f"Visual chunk {c.get('doc_id')} missing image_path, skipped")
+                        continue
+                    img_type = Path(image_path).suffix[1:].lower()
+                    embedding_result = await self._multimodal_embedder.generate_embeddings([{
                         'type': 'image',
-                        'content': f"data:image/{img_type};base64,{chunk_data.get('original_content', '')}",
-                        'metadata': chunk_data['metadata']
-                    }
-                ])
-                embedding = embedding_result[0].embedding if embedding_result else None
-            else:
-                # 使用文本嵌入器处理文本
-                embedding_result = await self._embedder.embed_text(chunk_data['content'])
-                embedding = embedding_result.embedding if embedding_result else None
-            
-            if embedding:
-                # 清理元数据
-                metadata = clean_metadata(chunk_data['metadata'])
-                
-                vector_doc = VectorDocument(
-                    id=chunk_data['doc_id'],
-                    text=chunk_data['content'],
-                    embedding=embedding,
-                    metadata=metadata
-                )
-                vector_docs.append(vector_doc)
-        
-        # 存储到向量数据库
+                        'content': f"data:image/{img_type};base64,{c.get('original_content', '')}",
+                        'metadata': c['metadata']
+                    }])
+                    if not embedding_result or not embedding_result[0].embedding:
+                        continue
+                    vector_docs.append(VectorDocument(
+                        id=c['doc_id'],
+                        text=c['content'],
+                        embedding=embedding_result[0].embedding,
+                        metadata=clean_metadata(c['metadata'])
+                    ))
+
+        # ---------- 入库 + BM25（共用） ----------
         if vector_docs:
             with log_process("Vector Storage"):
                 await self._vector_store.add_documents(vector_docs)
-            
-            # 添加文本内容到BM25索引
-            if self._retriever and hasattr(self._retriever, '_bm25_index') and self._retriever._bm25_index:
-                text_docs = [doc for doc in vector_docs if doc.metadata.get('chunk_type') == 'text']
-                if text_docs:
-                    with log_process("BM25 Indexing"):
-                        documents = [doc.text for doc in text_docs]
-                        doc_ids = [doc.id for doc in text_docs]
-                        metadata_list = [doc.metadata for doc in text_docs]
-                        
-                        await self._retriever._bm25_index.add_documents(
-                            documents, doc_ids, metadata_list
-                        )
-        
+            await self._index_text_chunks_to_bm25(vector_docs)
+
         return len(vector_docs)
 
     def _image_to_data_url(self, image_path: Union[str, Path]) -> str:

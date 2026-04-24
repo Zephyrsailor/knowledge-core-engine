@@ -311,17 +311,24 @@ class Retriever:
         """Combine results from multiple sources."""
         # Track all unique documents
         combined_dict = {}
-        
+
+        # Pre-compute weight normalization
+        total_weight = vector_weight + bm25_weight
+        norm_vector_weight = vector_weight / total_weight
+        norm_bm25_weight = bm25_weight / total_weight
+
         # Add vector results
         for result in vector_results:
             combined_dict[result.chunk_id] = result
             result.metadata["vector_score"] = result.score
             result.metadata["fusion_method"] = "weighted"
-            # Normalize vector score
-            result.metadata["normalized_vector_score"] = self._normalize_score(result.score, "vector")
+            normalized_vs = self._normalize_score(result.score, "vector")
+            result.metadata["normalized_vector_score"] = normalized_vs
             # 如果没有BM25结果，设置BM25分数为0
             result.metadata["bm25_score"] = 0.0
             result.metadata["normalized_bm25_score"] = 0.0
+            # 关键修复：向量-only 也要走加权归一化公式，否则和 merged 结果不在同一尺度
+            result.score = normalized_vs * norm_vector_weight
         
         # Add/merge BM25 results
         for result in bm25_results:
@@ -333,13 +340,6 @@ class Retriever:
                 existing = combined_dict[result.chunk_id]
                 existing.metadata["bm25_score"] = result.score
                 existing.metadata["normalized_bm25_score"] = normalized_bm25_score
-                
-                # Weighted combination using normalized scores
-                # 确保权重和为1
-                total_weight = vector_weight + bm25_weight
-                norm_vector_weight = vector_weight / total_weight
-                norm_bm25_weight = bm25_weight / total_weight
-                
                 existing.score = (
                     existing.metadata["normalized_vector_score"] * norm_vector_weight +
                     normalized_bm25_score * norm_bm25_weight
@@ -351,9 +351,6 @@ class Retriever:
                 result.metadata["vector_score"] = 0.0
                 result.metadata["normalized_vector_score"] = 0.0
                 result.metadata["fusion_method"] = "weighted"
-                # 确保权重和为1
-                total_weight = vector_weight + bm25_weight
-                norm_bm25_weight = bm25_weight / total_weight
                 result.score = normalized_bm25_score * norm_bm25_weight
                 combined_dict[result.chunk_id] = result
         
