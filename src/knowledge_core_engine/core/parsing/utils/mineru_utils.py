@@ -484,3 +484,9 @@ class Qwen25VL72BInstruct:
         self.model = "Qwen/Qwen2.5-VL-72B-Instruct"
         self.api_key = os.getenv("MODELSCOPE_API_KEY")
         self.api_base = "https://api-inference.modelscope.cn/v1/"
+
+class Qwen3VL8BInstruct:
+    def __init__(self):
+        self.model = "Qwen/Qwen3-VL-8B-Instruct"
+        self.api_key = os.getenv("MODELSCOPE_API_KEY")
+        self.api_base = "https://api-inference.modelscope.cn/v1/"        

@@ -232,9 +232,9 @@ class KnowledgeEngine:
         # 初始化图片描述LLM（如果启用自动描述）
         if self.auto_caption:
             from langchain_openai import ChatOpenAI
-            from .core.parsing.utils.mineru_utils import Qwen25VL72BInstruct
+            from .core.parsing.utils.mineru_utils import Qwen3VL8BInstruct
             try:
-                model_config = Qwen25VL72BInstruct()
+                model_config = Qwen3VL8BInstruct()
                 self.caption_llm = ChatOpenAI(
                     openai_api_base=model_config.api_base,
                     openai_api_key=model_config.api_key,
